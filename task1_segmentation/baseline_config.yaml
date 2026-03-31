@@ -1,0 +1,118 @@
+# Task 1: Segmentation - Baseline Configuration
+# Standard configuration for liver segmentation with all 5 classes
+
+experiment_name: "baseline_unet"
+group_number: 0  # Your group number — used to name the submission zip (e.g. group0_task1_results.zip)
+
+# ---------------------------------------------------------------------------
+# Architecture selection
+# Change 'type' to switch architectures. Parameters are read from the
+# matching sub-section below. All other sub-sections are ignored at runtime
+# but left here as ready-to-use references.
+# ---------------------------------------------------------------------------
+architecture:
+  type: "unet"    # Options: unet | segresnet | swinunetr
+
+  unet:
+    channels:      [16, 32, 64, 128, 256]  # feature maps per encoder level
+    strides:       [2, 2, 2, 2]            # downsampling per level
+    num_res_units: 2                        # residual units per block
+    norm:          "BATCH"                 # BATCH | INSTANCE | GROUP
+    roi_size:      [160, 160, 160]         # sliding-window patch size
+    sw_batch_size: 4
+
+  segresnet:
+    init_filters:  16              # base filter count
+    blocks_down:   [1, 2, 2, 4]   # encoder blocks per level
+    blocks_up:     [1, 1, 1]      # decoder blocks per level
+    dropout_prob:  0.0
+    roi_size:      [128, 128, 128]
+    sw_batch_size: 4
+
+  swinunetr:
+    feature_size:   24    # embedding dim — must be divisible by 12 (48 needs >16 GB)
+    drop_rate:      0.0
+    attn_drop_rate: 0.0
+    use_checkpoint: true  # gradient checkpointing — required on ≤16 GB cards
+    roi_size:       [64, 64, 64]   # 96^3 OOMs on ≤16 GB; use 64^3 to stay safe
+    sw_batch_size:  1     # SwinUNETR needs batch_size=1 on ≤16 GB
+
+# Model training settings
+model:
+  num_classes: 3  # 0: BG, 1: Liver, 2: Tumor
+  learning_rate: 1e-1
+  weight_decay: 1e-1
+  compute_hd95: false  # Enable HD95 metric computation during validation (disable for faster training)
+  # Class names (foreground only, background excluded for metrics)
+  class_names:
+    - "liver"
+    - "tumor"
+
+# Training parameters
+training:
+  epochs: 1
+  batch_size: 2  # SwinUNETR needs batch_size=1 on ≤16 GB; increase for UNet/SegResNet
+  num_workers: 1
+  validation_interval: 1  # Validate every N epochs
+  save_interval: 1  # Save checkpoint every N epochs
+  patience: 1  # Early stopping patience (epochs)
+
+# Data paths - UPDATE THESE TO YOUR DATA LOCATION
+data:
+  train_images: "/path/to/train/images"
+  train_labels: "/path/to/train/labels"
+  val_images:   # leave empty to use random split of train data instead
+  val_labels:   # leave empty to use random split of train data instead
+  # Test data paths (used by evaluate.py)
+  test_images: null  # path to test images directory
+  test_labels: null  # path to test labels directory
+  val_fraction: 0.2   # fraction of training data reserved for validation (random split)
+  cache_rate: 0.5  # Fraction of data to cache in memory (0-1)
+
+# Data augmentation settings
+augmentation:
+  # Spatial transforms
+  random_flip_prob: 0.5
+  random_rotate_range: 15  # degrees
+  random_scale_range: [0.9, 1.1]
+
+  # Intensity transforms
+  intensity_shift: 0.1
+  intensity_scale: 0.1
+  gaussian_noise_std: 0.01
+
+  # Advanced augmentation
+  elastic_deformation: true
+  elastic_sigma_range: [5, 7]
+  elastic_magnitude_range: [100, 200]
+
+# Optimizer settings
+optimizer:
+  type: "adam"  # adam, sgd, adamw
+  lr: 1e-4
+  weight_decay: 1e-5
+  momentum: 0.9  # For SGD
+  betas: [0.9, 0.999]  # For Adam/AdamW
+  eps: 1e-8
+
+# Learning rate scheduler
+scheduler:
+  type: "cosine"  # cosine, step, reduce_on_plateau, none
+  T_max: 100  # For cosine annealing
+  eta_min: 1e-6  # Minimum learning rate
+  step_size: 30  # For StepLR
+  gamma: 0.1  # LR decay factor
+  patience: 10  # For ReduceLROnPlateau
+  factor: 0.5  # LR reduction factor
+
+# Output settings
+output:
+  save_best_only: true
+  save_last: true
+
+# Reproducibility
+seed: 42
+
+# Hardware settings
+device: "cuda"  # cuda or cpu (auto-detected if not specified)
+mixed_precision: true  # Use automatic mixed precision training

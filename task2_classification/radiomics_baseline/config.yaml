@@ -1,0 +1,178 @@
+# =============================================================================
+#  Radiomics Baseline — Task 2 Liver Tumour Classification
+# =============================================================================
+#
+#  Three-step workflow
+#  -------------------
+#  Step 1  Feature extraction  (run once for train data, repeat for test data)
+#
+#    python extract_features.py \
+#        --config config.yaml \
+#        --images /path/to/imagesTr \
+#        --masks  /path/to/labelsTr \
+#        --labels-csv /path/to/labels.csv \
+#        --output-csv features/train_features.csv
+#
+#    # test data (no --labels-csv):
+#    python extract_features.py \
+#        --config config.yaml \
+#        --images /path/to/imagesTs \
+#        --masks  /path/to/labelsTs \
+#        --output-csv features/test_features.csv
+#
+#  Step 2  Training
+#
+#    python train.py \
+#        --config config.yaml \
+#        --features features/train_features.csv
+#
+#    # Override classifier and fold count at the command line:
+#    python train.py --config config.yaml --features features/train_features.csv \
+#        --classifier xgboost --k-folds 5
+#
+#  Step 3  Evaluation / submission
+#
+#    python evaluate.py \
+#        --config config.yaml \
+#        --features features/test_features.csv \
+#        --models-dir model_checkpoints/radiomics_rf_baseline
+#
+# =============================================================================
+
+experiment_name: "radiomics_rf_baseline"
+group_number: 0
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+data:
+  class_names:
+    - BCLM   # index 0
+    - CRLM   # index 1
+    - HCC    # index 2
+    - HH     # index 3
+    - ICC    # index 4
+
+  # Integer label in the segmentation mask that corresponds to the tumour ROI.
+  # Task 1 output masks:  0 = Background  1 = Liver  2 = Tumour  →  use 2
+  label_value: 2
+
+# ---------------------------------------------------------------------------
+# Feature Extraction  (used by extract_features.py)
+# ---------------------------------------------------------------------------
+feature_extraction:
+  resampling:
+    enabled: true
+    # Resample image + mask to this isotropic voxel spacing (mm) before
+    # feature extraction.  Use the same spacing for train and test.
+    target_spacing: [1.0, 1.0, 1.0]
+    # Interpolation for the CT image.  Mask always uses nearest-neighbour.
+    # Options: sitkBSpline | sitkLinear | sitkNearestNeighbor
+    interpolator: "sitkBSpline"
+
+  # PyRadiomics feature families to compute.
+  # Comment out 'shape' if your tumour masks are very small or noisy.
+  feature_classes:
+    - firstorder    # intensity statistics  (mean, std, energy, skewness, …)
+    - glcm          # grey-level co-occurrence matrix  (texture)
+    - glszm         # grey-level size-zone matrix
+    - glrlm         # grey-level run-length matrix
+    - ngtdm         # neighbourhood grey-tone difference matrix
+    - gldm          # grey-level dependence matrix
+    - shape         # morphological features  (volume, surface area, sphericity, …)
+
+  # Intensity binning width (HU).  Decrease for finer texture resolution.
+  bin_width: 25
+
+  # Normalise voxel intensities before binning.
+  # Keep false to preserve raw HU values (recommended for CT radiomics).
+  normalize: false
+  normalize_scale: 100   # only used when normalize: true
+
+  # Parallel extraction workers.  0 or 1 = sequential (safer on Windows).
+  n_jobs: 8
+
+# ---------------------------------------------------------------------------
+# Classifier  (used by train.py)
+# ---------------------------------------------------------------------------
+classifier:
+  # Active classifier.
+  # Options: random_forest | svm | logistic_regression | xgboost | mlp
+  type: "random_forest"
+
+  random_forest:
+    n_estimators:     300
+    max_depth:        null      # null = grow until pure leaves
+    min_samples_split: 2
+    min_samples_leaf:  1
+    class_weight:     "balanced"
+    n_jobs:           -1
+
+  svm:
+    C:            1.0
+    kernel:       "rbf"         # rbf | linear | poly
+    gamma:        "scale"
+    class_weight: "balanced"
+    # probability is always forced to true internally (required for AUROC)
+
+  logistic_regression:
+    C:            1.0
+    max_iter:     2000
+    class_weight: "balanced"
+    solver:       "lbfgs"       # lbfgs | saga | newton-cg
+    n_jobs:       -1
+
+  xgboost:
+    n_estimators:     300
+    max_depth:        6
+    learning_rate:    0.05
+    subsample:        0.8
+    colsample_bytree: 0.8
+    n_jobs:           -1
+    # Requires:  pip install xgboost
+
+  mlp:
+    hidden_layer_sizes:  [256, 128, 64]
+    activation:          "relu"    # relu | tanh | logistic
+    alpha:               0.0001   # L2 regularisation strength
+    batch_size:          "auto"
+    max_iter:            1000
+    learning_rate_init:  0.001
+    early_stopping:      true
+    validation_fraction: 0.1
+    n_iter_no_change:    20
+
+# ---------------------------------------------------------------------------
+# Training  (used by train.py)
+# ---------------------------------------------------------------------------
+training:
+  # k_folds <= 1  →  single train/val split
+  # k_folds > 1   →  k-fold cross-validation
+  k_folds: 1
+
+  # Fraction of data used for training when k_folds <= 1.
+  train_val_split: 0.8
+
+# ---------------------------------------------------------------------------
+# Fine-tuning via GridSearchCV  (disabled by default)
+# ---------------------------------------------------------------------------
+# When enabled, wraps the pipeline in a GridSearchCV before fitting.
+# param_grid keys must use the 'classifier__' prefix (sklearn Pipeline convention).
+# Adjust the param_grid to match the active classifier.
+fine_tuning:
+  enabled: true
+  cv: 3               # inner CV folds for the grid search
+  scoring: "f1_macro"
+  param_grid:
+    classifier__n_estimators: [100, 300]
+    classifier__max_depth: [null, 5, 10]
+
+# ---------------------------------------------------------------------------
+# Output paths  (relative to this file's directory)
+# ---------------------------------------------------------------------------
+output:
+  checkpoint_dir: "./model_checkpoints"
+  results_dir:    "./results"
+  features_dir:   "./features"
+
+seed: 42

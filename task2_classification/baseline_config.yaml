@@ -1,0 +1,86 @@
+# Task 2: Classification - Baseline Configuration
+# Baseline configuration using MONAI ResNet-18 architecture.
+# Switch architectures by changing model_type (resnet18 | resnet50 | densenet121).
+
+experiment_name: "baseline_resnet18"
+group_number: 0  # Your group number — used to name the output CSV (e.g. group0_task2_results.csv)
+
+# Model architecture
+model:
+  model_type: "resnet18"  # Options: resnet18 | resnet50 | densenet121
+  num_classes: 5
+  # Class names in label-index order (assigned alphabetically by ROIDataset):
+  #   0: BCLM  (Breast Cancer Liver Metastasis)
+  #   1: CRLM  (Colorectal Cancer Liver Metastasis)
+  #   2: HCC   (Hepatocellular Carcinoma)
+  #   3: HH    (Hepatic Haemangioma)
+  #   4: ICC   (Intrahepatic Cholangiocarcinoma)
+  class_names:
+    - BCLM
+    - CRLM
+    - HCC
+    - HH
+    - ICC
+  pretrained: true  # Set to true if using ImageNet pretrained weights
+  learning_rate: 1e-1
+  weight_decay: 1e-1
+
+  # Architecture-specific parameters — only the block matching model_type is used.
+  resnet18:
+    conv1_t_size:   7   # depth-axis kernel size for the first conv layer
+    conv1_t_stride: 1   # use 1 for 64^3 volumes (avoids over-striding)
+
+  resnet50:
+    conv1_t_size:   7   # depth-axis kernel size for the first conv layer
+    conv1_t_stride: 2   # stride 2 helps downsample the depth axis faster (saves memory)
+
+  densenet121:
+    growth_rate:  32    # feature maps added per dense layer
+    bn_size:       4    # bottleneck size multiplier (bn_size × growth_rate channels)
+    dropout_prob: 0.0   # per-layer dropout (try 0.1–0.2 to combat overfitting)
+
+# Training parameters
+training:
+  epochs: 1
+  batch_size: 2
+  num_workers: 1
+  validation_interval: 1
+  patience: 1
+  # Cross-validation: set k_folds > 1 to enable stratified k-fold CV.
+  # When enabled, train_val_split is ignored; each fold uses (k-1)/k data
+  # for training and 1/k for validation. A fresh model is trained per fold.
+  k_folds: 1          # 0 or 1 = standard single split; 5 = 5-fold CV
+
+# Data paths
+data:
+  train_dir: "./processed_data"
+  val_dir: null
+  train_val_split: 0.8
+
+# Standard augmentation for baseline
+augmentation:
+  random_flip_prob: 0.5
+  random_rotate_prob: 0.5
+  random_rotate_range: 10
+  adjust_contrast_prob: 0.5
+  contrast_range: [0.8, 1.2]
+  adjust_brightness_prob: 0.5
+  brightness_delta: 0.1
+  gaussian_noise_prob: 0.3
+  gaussian_noise_std: 0.01
+
+# Optimizer
+optimizer:
+  type: "adam"
+  lr: 1e-4
+  weight_decay: 1e-4
+
+# Loss
+loss:
+  type: "cross_entropy"
+  class_weights: null
+
+# Output
+output:
+  checkpoint_dir: "./model_checkpoints"
+  save_best_only: true
