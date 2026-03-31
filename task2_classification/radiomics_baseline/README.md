@@ -187,6 +187,6 @@ classifier:
 ## References
 
 - **PyRadiomics Documentation:** https://pyradiomics.readthedocs.io/
-- **Radiomics Paper:** https://doi.org/10.1186/s40644-016-0084-2
+- **Radiomics Paper:** https://doi.org/10.1148/radiol.2015151169
 - **scikit-learn:** https://scikit-learn.org/
 
