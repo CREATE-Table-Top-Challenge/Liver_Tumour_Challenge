@@ -19,7 +19,7 @@ Both tasks use **PyTorch + MONAI**, with baseline models and training templates 
 ✅ **Everything is pre-configured for you!**
 - Python environment ready with all dependencies
 - Dataset pre-downloaded and prepared
-- Skip to → [Training the Networks](#-training-the-networks)
+- Activate the environment and skip to → [Training the Networks](#-task-1-abdominal-ct-image-segmentation)
 
 ### For Local Development
 Follow the setup steps below to configure your environment and download data.
@@ -143,7 +143,7 @@ python train.py \
     --max_epochs 100 \
     --batch_size 2 \
     --learning_rate 1e-4 \
-    --output_dir ./checkpoints
+    --output_dir ./model_checkpoints
 ```
 
 #### Key Arguments
@@ -172,7 +172,7 @@ python train.py \
 #### Evaluate on Test Data
 ```bash
 python evaluate.py \
-    --checkpoint ./checkpoints/baseline_unet/best_model.pth \
+    --checkpoint ./model_checkpoints/baseline_unet/best_model.pth \
     --test_images /path/to/test/imagesTr \
     --output_dir ./predictions \
     --group 1
@@ -353,7 +353,7 @@ src/
 │   │   ├── data_loader.py             # Data loading
 │   │   ├── transforms.py              # Data augmentation
 │   │   └── metric_tracker.py          # Metrics logging
-│   └── checkpoints/                   # Saved models (generated)
+│   └── model_checkpoints/             # Saved models (generated)
 |
 ├── task2_classification/
 │   ├── train.py                       # Training with k-fold CV
@@ -373,7 +373,7 @@ src/
 │   ├── radiomics_baseline/            # Alternative: Radiomics + Random Forest
 │   │   ├── README.md                  # Setup for radiomics environment
 │   │   └── ...
-|   └── checkpoints/                   # Saved models (generated)
+|   └── model_checkpoints/             # Saved models (generated)
 ```
 
 ---

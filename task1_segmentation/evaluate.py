@@ -62,7 +62,7 @@ def parse_args():
     parser.add_argument(
         '--checkpoint',
         type=str,
-        default='/checkpoints/baseline_unet/best_model.pth',
+        default='./model_checkpoints/baseline_unet/best_model.pth',
         help='Path to model checkpoint'
     )
     

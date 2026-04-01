@@ -48,7 +48,6 @@ organizer/
 .github/
 
 # Checkpoints (all trained models)
-**/checkpoints/
 **/model_checkpoints/
 
 # Results and predictions

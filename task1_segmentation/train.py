@@ -164,11 +164,11 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
     if args.output_dir is None:
         experiment_name = config.get('experiment_name', '')
         if experiment_name:
-            args.output_dir = os.path.join('./checkpoints', experiment_name)
+            args.output_dir = os.path.join('./model_checkpoints', experiment_name)
     
-    # Ensure parent checkpoints directory exists if using default path
-    if args.output_dir and args.output_dir.startswith('./checkpoints'):
-        os.makedirs('./checkpoints', exist_ok=True)
+    # Ensure parent model_checkpoints directory exists if using default path
+    if args.output_dir and args.output_dir.startswith('./model_checkpoints'):
+        os.makedirs('./model_checkpoints', exist_ok=True)
     
     # Seed
     if args.seed is None:
