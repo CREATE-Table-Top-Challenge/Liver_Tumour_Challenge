@@ -1,11 +1,9 @@
 """
 PyRadiomics feature extractor wrapper.
 
-Any configuration is read once in __init__; call extract() once per patient.
-
-The label binarisation step converts the multi-class segmentation mask
-(0 = BG, 1 = Liver, 2 = Tumour) to a binary mask containing only the ROI
-specified by config['data']['label_value'] before passing it to PyRadiomics.
+Provides two methods:
+- extract(): For CT + segmentation mask pairs (legacy/flexible approach)
+- extract_from_roi(): For tumor ROI NIfTI files (simplified approach)
 """
 import logging
 
@@ -129,4 +127,56 @@ class RadiomicsExtractor:
 
         except Exception as exc:
             logging.error("Extraction failed for %s: %s", image_path, exc)
+            return None
+
+    def extract_from_roi(self, roi_path):
+        """
+        Extract radiomics features from a tumor ROI NIfTI file.
+
+        The ROI is already masked and cropped. No additional binarization needed.
+
+        Parameters
+        ----------
+        roi_path : str | Path
+            Path to the ROI NIfTI file (.nii or .nii.gz).
+
+        Returns
+        -------
+        dict[str, float]
+            Feature name → scalar value.  Only numeric features are included;
+            NaN / Inf values are replaced with 0.0.
+        None
+            Returned when extraction fails.
+        """
+        try:
+            roi = sitk.ReadImage(str(roi_path))
+
+            # Create binary mask (any non-background voxel is foreground)
+            # Background is clipped to -160 HU; foreground is > -160 HU
+            roi_arr = sitk.GetArrayFromImage(roi)
+            binary_arr = (roi_arr > -160).astype(np.uint8)
+
+            if binary_arr.sum() == 0:
+                logging.warning("No foreground voxels found in %s — patient skipped.", roi_path)
+                return None
+
+            binary_mask = sitk.GetImageFromArray(binary_arr)
+            binary_mask.CopyInformation(roi)
+
+            result = self._extractor.execute(roi, binary_mask)
+
+            features = {}
+            for k, v in result.items():
+                if k.startswith("diagnostics_"):
+                    continue
+                try:
+                    val = float(v)
+                    features[k] = 0.0 if (np.isnan(val) or np.isinf(val)) else val
+                except (TypeError, ValueError):
+                    pass   # skip non-numeric entries
+
+            return features or None
+
+        except Exception as exc:
+            logging.error("Extraction failed for %s: %s", roi_path, exc)
             return None

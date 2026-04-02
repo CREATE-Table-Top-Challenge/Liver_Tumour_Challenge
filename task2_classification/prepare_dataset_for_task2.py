@@ -1,29 +1,39 @@
 """
 Dataset Preparation Script for Task 2: Tumor ROI Classification
 
-Processes NIfTI CT volumes and segmentation masks into pre-cropped numpy arrays
-organized by tumor type (class) for training/evaluation.
+Processes tumor ROI NIfTI files for training and evaluation.
+Students use this script to resample, window, and convert to numpy arrays.
 
-Pipeline per sample:
-  1. Resample CT and mask to isotropic spacing (default 1x1x1 mm)
-  2. Apply abdomen HU windowing (center=40, width=400 -> [-160, 240])
-  3. Crop CT to mask bounding box (ROI)
-  4. Save cropped array as .npy in output/<type>/
+Pipeline per sample (unified for train and test):
+  1. Read ROI NIfTI file (mask already applied, background=-1000 HU).
+  2. Resample to isotropic spacing (default 1x1x1 mm) in physical space.
+  3. Apply abdomen HU windowing (center=40, width=400 -> [-160, 240]).
+     Note: Background (-1000 HU) is clipped to window floor (-160).
+  4. Convert to numpy and save as .npy.
 
-Expected input layout:
-    <input_path>/
-        imagesTr/    <- CT volumes  (*.nii.gz)
-        labelsTr/    <- Mask files  (*.nii.gz)
+Expected input layout (ROI files):
+    Option 1 (with roi_data/ subdirectory):
+        <input_path>/
+            roi_data/    <- ROI NIfTI files (*.nii.gz)
+    Option 2 (flat structure, ROI files directly in input_path):
+        <input_path>/
+            case_1.nii.gz, case_2.nii.gz, ... <- ROI files
 
-Usage:
+Usage (train with class organization):
     python prepare_dataset_for_task2.py \\
-        --input_path  /path/to/raw_dataset \\
-        --output_path /path/to/processed_dataset \\
-        --labels_csv    /path/to/split_info.csv
+        --input_path  /data/train \\
+        --output_path /data/processed_train \\
+        --labels_csv  /data/labels.csv
 
-CSV format (required columns):
+Usage (test with flat output):
+    python prepare_dataset_for_task2.py \\
+        --input_path  /data/test \\
+        --output_path /data/processed_test \\
+        --test-mode
+
+CSV format for train mode (required columns):
     patient_id  - base filename without extension (e.g. "patient_001")
-    type        - tumor class label (e.g. "liver", "cyst", "tumor")
+    type        - tumor class label (e.g. "HCC", "ICC", "CRLM", "BCLM", "HH")
 """
 
 import argparse
@@ -47,7 +57,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
 
 # ---------------------------------------------------------------------------
 # Preprocessing helpers
@@ -87,7 +96,7 @@ def resample_to_spacing(
     resampler.SetOutputDirection(image.GetDirection())
     resampler.SetOutputOrigin(image.GetOrigin())
     resampler.SetTransform(sitk.Transform())
-    resampler.SetDefaultPixelValue(0)
+    resampler.SetDefaultPixelValue(-1000.0)  # Use background HU value for out-of-bounds voxels
     resampler.SetInterpolator(interpolator)
 
     return resampler.Execute(image)
@@ -109,64 +118,7 @@ def apply_abdomen_window(volume: np.ndarray, window_center: int = 40, window_wid
     return np.clip(volume, lower, upper).astype(np.float32)
 
 
-def get_bounding_box_3d(
-    mask_volume: np.ndarray,
-) -> tuple[int, int, int, int, int, int] | None:
-    """Return the 3-D tight bounding box of all nonzero voxels in *mask_volume*.
 
-    Array axis order is (z, y, x) — consistent with SimpleITK ``GetArrayFromImage``.
-
-    Returns:
-        ``(min_x, min_y, min_z, max_x, max_y, max_z)`` or ``None`` if the
-        mask is entirely zero.
-    """
-    if not np.any(mask_volume):
-        return None
-
-    non_zero = np.argwhere(mask_volume)          # shape (N, 3) — columns: z, y, x
-    min_z, min_y, min_x = non_zero.min(axis=0)
-    max_z, max_y, max_x = non_zero.max(axis=0)
-
-    return (int(min_x), int(min_y), int(min_z), int(max_x), int(max_y), int(max_z))
-
-
-def crop_to_bbox(
-    volume: np.ndarray,
-    mask: np.ndarray,
-    margin: int = 0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Crop *volume* and *mask* to the tight 3-D bounding box of the ROI.
-
-    Array axis order must be (z, y, x) for both inputs.
-
-    Args:
-        volume: 3-D CT array (z, y, x).
-        mask:   3-D binary/label mask — any nonzero value is treated as ROI.
-        margin: Extra voxels added on every side (clamped to array bounds).
-
-    Returns:
-        ``(cropped_volume, cropped_mask)`` — both clipped to the same box.
-        If the mask is empty, returns the originals unchanged.
-    """
-    bbox = get_bounding_box_3d(mask)
-    if bbox is None:
-        logger.warning("Empty mask — returning full volume without cropping.")
-        return volume, mask
-
-    min_x, min_y, min_z, max_x, max_y, max_z = bbox
-
-    # Apply margin, clamped to array bounds  (axis order: z, y, x)
-    min_z = max(0, min_z - margin)
-    max_z = min(volume.shape[0] - 1, max_z + margin)
-    min_y = max(0, min_y - margin)
-    max_y = min(volume.shape[1] - 1, max_y + margin)
-    min_x = max(0, min_x - margin)
-    max_x = min(volume.shape[2] - 1, max_x + margin)
-
-    cropped_volume = volume[min_z:max_z + 1, min_y:max_y + 1, min_x:max_x + 1]
-    cropped_mask   = mask  [min_z:max_z + 1, min_y:max_y + 1, min_x:max_x + 1]
-
-    return cropped_volume, cropped_mask
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -290,25 +242,21 @@ def _process_one(task: dict) -> dict:
     patient_id     = task["patient_id"]
     split          = task["split"]
     tumor_type     = task["tumor_type"]
-    ct_path        = task["ct_path"]
-    mask_path      = task["mask_path"]
+    roi_path       = task["roi_path"]
     out_dir        = task["out_dir"]
     target_spacing = task["target_spacing"]
     window_center  = task["window_center"]
     window_width   = task["window_width"]
-    bbox_margin    = task["bbox_margin"]
     output_format  = task["output_format"]
     png_axis       = task["png_axis"]
-    target_label   = task["target_label"]
 
     try:
-        roi = process_sample(
-            ct_path, mask_path,
+        # Process ROI NIfTI file
+        roi = process_cropped_roi(
+            roi_path,
             target_spacing=target_spacing,
             window_center=window_center,
             window_width=window_width,
-            bbox_margin=bbox_margin,
-            target_label=target_label,
         )
         save_sample(roi, out_dir, patient_id, output_format=output_format, png_axis=png_axis)
         shape = roi.shape
@@ -319,82 +267,46 @@ def _process_one(task: dict) -> dict:
                 "status": _FAIL, "message": str(exc), "shape": None}
 
 
-def process_sample(
-    ct_path: str,
-    mask_path: str,
+def process_cropped_roi(
+    roi_nifti_path: str,
     target_spacing: tuple = (1.0, 1.0, 1.0),
     window_center: int = 40,
     window_width: int = 400,
-    bbox_margin: int = 0,
-    target_label: int | None = None,
 ) -> np.ndarray:
-    """Load one CT / mask pair with SimpleITK, preprocess, and return the cropped ROI.
+    """Process a tumor ROI NIfTI file (used for both train and test).
 
     Pipeline:
-      1. Read CT and mask with SimpleITK (preserves full spatial metadata).
-      2. Cast CT to float32; cast mask to uint8 (nearest-neighbour interp).
-      3. Resample both to *target_spacing* in physical space using the same
-         geometric reference — CT with linear interpolation, mask with
-         nearest-neighbour so label values are preserved exactly.
-      4. Convert to numpy arrays (axis order: z, y, x).
-      5. Apply abdomen HU window to CT.
-      6. Build ROI mask: if *target_label* is given, isolate that label;
-         otherwise binarise all nonzero voxels.
-      7. Crop CT to the ROI bounding box.
+      1. Read ROI NIfTI file (mask already applied, background=-1000 HU).
+      2. Resample to *target_spacing* in physical space (preserves spatial metadata).
+      3. Apply abdomen HU window: clip to [center-width/2, center+width/2].
+         Note: Background voxels at -1000 HU are clipped to window floor.
+      4. Convert to numpy array (z, y, x axis order).
 
     Args:
-        ct_path:        Path to the CT NIfTI file.
-        mask_path:      Path to the segmentation mask NIfTI file.
+        roi_nifti_path: Path to ROI NIfTI file.
         target_spacing: Isotropic voxel spacing to resample to (mm).
-        window_center:  Abdomen HU window center.
-        window_width:   Abdomen HU window width.
-        bbox_margin:    Extra voxel margin around the bounding box on each side.
-        target_label:   Integer label value to isolate from the mask before
-                        computing the bounding box (e.g. 4 for tumour in a
-                        5-class liver mask).  ``None`` (default) uses all
-                        nonzero voxels.
+        window_center:  Abdomen HU window center (default 40).
+        window_width:   Abdomen HU window width (default 400 -> [-160, 240]).
 
     Returns:
-        3-D float32 numpy array of the cropped ROI, axis order (z, y, x).
+        3-D float32 numpy array of the windowed ROI, axis order (z, y, x).
     """
-    # --- Read ---
-    ct_sitk   = sitk.ReadImage(ct_path,   sitk.sitkFloat32)
-    mask_sitk = sitk.ReadImage(mask_path, sitk.sitkUInt8)
+    # --- Read ROI ---
+    roi_sitk = sitk.ReadImage(roi_nifti_path, sitk.sitkFloat32)
 
-    # --- Resample to isotropic spacing in physical space ---
-    ct_resampled   = resample_to_spacing(ct_sitk,   target_spacing, sitk.sitkLinear)
-    mask_resampled = resample_to_spacing(mask_sitk, target_spacing, sitk.sitkNearestNeighbor)
+    # --- Resample to target spacing ---
+    roi_resampled = resample_to_spacing(roi_sitk, target_spacing, sitk.sitkLinear)
 
     # --- Convert to numpy (z, y, x ordering) ---
-    ct_arr   = sitk.GetArrayFromImage(ct_resampled).astype(np.float32)   # (z, y, x)
-    mask_arr = sitk.GetArrayFromImage(mask_resampled)                     # (z, y, x)
-
-    # --- Build ROI mask ---
-    if target_label is not None:
-        mask_binary = (mask_arr == target_label).astype(np.uint8)
-        if mask_binary.sum() == 0:
-            raise ValueError(
-                f"Label {target_label} not found in mask after resampling. "
-                f"Present labels: {np.unique(mask_arr).tolist()}"
-            )
-    else:
-        mask_binary = (mask_arr > 0).astype(np.uint8)
-        if mask_binary.sum() == 0:
-            raise ValueError("Mask contains no nonzero voxels after resampling.")
+    roi_arr = sitk.GetArrayFromImage(roi_resampled).astype(np.float32)
 
     # --- Abdomen HU window ---
-    ct_windowed = apply_abdomen_window(ct_arr, window_center, window_width)
+    roi_windowed = apply_abdomen_window(roi_arr, window_center, window_width)
 
-    # --- Crop CT and mask to the ROI bounding box ---
-    roi, roi_mask = crop_to_bbox(ct_windowed, mask_binary, margin=bbox_margin)
+    return roi_windowed
 
-    # --- Zero out voxels outside the mask within the cropped box ---
-    # -1000 HU ~= air, used as a universal background value for CT scans
-    background_hu = -1000.0
-    roi = roi.copy()
-    roi[roi_mask == 0] = background_hu
 
-    return roi
+
 
 
 # ---------------------------------------------------------------------------
@@ -408,19 +320,20 @@ def prepare_dataset(
     target_spacing: tuple = (1.0, 1.0, 1.0),
     window_center: int = 40,
     window_width: int = 400,
-    bbox_margin: int = 0,
     output_format: str = "npy",
     png_axis: int = 2,
     num_workers: int = 1,
-    target_label: int | None = None,
 ) -> None:
-    """Process a dataset and save numpy arrays organised by class.
+    """Process training ROI NIfTI files and organize by class.
 
-    Expected input layout::
+    Expected input layout (either format):
 
-        <input_path>/
-            imagesTr/    <- CT volumes  (*.nii.gz)
-            labelsTr/    <- Mask files  (*.nii.gz)
+        Option 1 (with roi_data/ subdirectory):
+            <input_path>/
+                roi_data/    <- ROI NIfTI files (*.nii.gz)
+        Option 2 (flat, files directly in input_path):
+            <input_path>/
+                case_1.nii.gz, case_2.nii.gz, ...
 
     Output layout::
 
@@ -431,22 +344,17 @@ def prepare_dataset(
                 ...
 
     Args:
-        input_path:     Directory containing ``imagesTr/`` and ``labelsTr/``.
-        output_path:    Root directory for processed output.
-        labels_csv:       Path to CSV with columns ``patient_id`` and ``type``.
-        target_spacing:  Isotropic voxel spacing to resample to (mm).
-        window_center:   Abdomen HU window center.
-        window_width:    Abdomen HU window width.
-        bbox_margin:     Extra voxels added around bounding box on each side.
-        output_format:   ``'npy'`` to save a single numpy array per sample, or
-                         ``'png'`` to save each slice as a grayscale PNG image.
-        png_axis:        Axis to slice along when output_format is ``'png'``
-                         (0=axial, 1=coronal, 2=sagittal).
-        num_workers:     Number of parallel worker processes (default 1 = sequential).
-        target_label:    Integer mask label to isolate before computing the
-                         bounding box (e.g. ``4`` for tumour in a 5-class
-                         liver segmentation mask).  ``None`` (default) uses
-                         all nonzero voxels.
+        input_path:     Directory containing roi_data/ or ROI files directly.
+        output_path:    Root directory for processed output (organized by class).
+        labels_csv:     Path to CSV with columns ``patient_id`` and ``type``.
+        target_spacing: Isotropic voxel spacing to resample to (mm).
+        window_center:  Abdomen HU window center.
+        window_width:   Abdomen HU window width.
+        output_format:  ``'npy'`` to save a single numpy array per sample, or
+                        ``'png'`` to save each slice as a grayscale PNG image.
+        png_axis:       Axis to slice along when output_format is ``'png'``
+                        (0=axial, 1=coronal, 2=sagittal).
+        num_workers:    Number of parallel worker processes (default 1 = sequential).
     """
     # --- Load CSV ---
     if not os.path.isfile(labels_csv):
@@ -465,23 +373,23 @@ def prepare_dataset(
     logger.info(f"Classes found in CSV: {all_types}")
     logger.info(f"Total patients in CSV: {len(patient_map)}")
 
-    # --- Locate imagesTr / labelsTr directly inside input_path ---
-    images_dir = os.path.join(input_path, "imagesTr")
-    labels_dir = os.path.join(input_path, "labelsTr")
-
-    if not os.path.isdir(images_dir) or not os.path.isdir(labels_dir):
-        logger.error(
-            f"Expected imagesTr/ and labelsTr/ directly inside: {input_path}\n"
-            f"Found subdirs: {os.listdir(input_path)}"
-        )
+    # --- Locate NIfTI files (check roi_data/, else use input_path directly) ---
+    images_dir = os.path.join(input_path, "roi_data")
+    if os.path.isdir(images_dir):
+        logger.info(f"Found roi_data/ subdirectory: {images_dir}")
+    elif os.path.isdir(input_path):
+        logger.info(f"Using input_path directly for ROI files: {input_path}")
+        images_dir = input_path
+    else:
+        logger.error(f"Invalid input_path: {input_path}")
         sys.exit(1)
 
-    image_files = [
+    roi_files = [
         f for f in os.listdir(images_dir)
         if f.endswith(".nii.gz") or f.endswith(".nii")
     ]
 
-    if not image_files:
+    if not roi_files:
         logger.error(f"No NIfTI files in {images_dir}")
         sys.exit(1)
 
@@ -492,34 +400,26 @@ def prepare_dataset(
     # --- Build task list ---
     tasks: list[dict] = []
 
-    for img_fname in sorted(image_files):
-        patient_id = img_fname.replace(".nii.gz", "").replace(".nii", "")
+    for roi_fname in sorted(roi_files):
+        patient_id = roi_fname.replace(".nii.gz", "").replace(".nii", "")
 
         if patient_id not in patient_map:
             logger.warning(f"'{patient_id}' not in CSV — skipping.")
             continue
 
         tumor_type = patient_map[patient_id]
-        mask_path  = find_file(labels_dir, patient_id)
-
-        if mask_path is None:
-            logger.warning(f"No mask found for '{patient_id}' — skipping.")
-            continue
 
         tasks.append({
             "patient_id":     patient_id,
             "split":          "",
             "tumor_type":     tumor_type,
-            "ct_path":        os.path.join(images_dir, img_fname),
-            "mask_path":      mask_path,
+            "roi_path":       os.path.join(images_dir, roi_fname),
             "out_dir":        os.path.join(output_path, tumor_type),
             "target_spacing": target_spacing,
             "window_center":  window_center,
             "window_width":   window_width,
-            "bbox_margin":    bbox_margin,
             "output_format":  output_format,
             "png_axis":       png_axis,
-            "target_label":   target_label,
         })
 
     if not tasks:
@@ -579,86 +479,82 @@ def prepare_test_dataset(
     target_spacing: tuple = (1.0, 1.0, 1.0),
     window_center: int = 40,
     window_width: int = 400,
-    bbox_margin: int = 0,
     output_format: str = "npy",
     png_axis: int = 2,
     num_workers: int = 1,
-    target_label: int | None = None,
 ) -> None:
-    """
-    Process test data that has no class labels.
+    """Process test ROI NIfTI files (flat output, no class organization).
 
-    Same preprocessing pipeline as ``prepare_dataset`` (resample, window, crop)
-    but does not require a CSV file.  All outputs are saved directly to
-    the output directory as a flat list of samples::
+    Expected input layout (either format):
 
-        <output_path>/<patient_id>.npy
+        Option 1:  <input_path>/roi_data/ <- ROI NIfTI files
+        Option 2:  <input_path>/ <- ROI files directly (case_1.nii.gz, case_2.nii.gz, ...)
 
-    The resulting flat folder is then passed directly to ``src/inferer.py``
-    via ``--input``.
+    Output layout (flat structure)::
 
-    Expected input layout::
-
-        <input_path>/
-            imagesTr/    <- CT volumes  (*.nii.gz)
-            labelsTr/    <- ROI masks   (*.nii.gz)  (needed for bounding box crop)
+        <output_path>/
+            <patient_id>.npy
+            <patient_id>.npy
+            ...
 
     Args:
-        input_path:     Directory containing imagesTr/ and labelsTr/.
-        output_path:    Root output directory.  Processed arrays will be saved here
-        Other args identical to :func:`prepare_dataset`.
+        input_path:     Directory containing roi_data/ or ROI files directly.
+        output_path:    Output directory where processed .npy files are saved (flat).
+        target_spacing: Isotropic voxel spacing to resample to (mm).
+        window_center:  Abdomen HU window center.
+        window_width:   Abdomen HU window width.
+        output_format:  ``'npy'`` or ``'png'`` (see prepare_dataset for details).
+        png_axis:       Axis to slice along when output_format is ``'png'``.
+        num_workers:    Number of parallel worker processes.
     """
-    images_dir = os.path.join(input_path, "imagesTr")
-    labels_dir = os.path.join(input_path, "labelsTr")
-
-    if not os.path.isdir(images_dir) or not os.path.isdir(labels_dir):
-        logger.error(
-            f"Expected imagesTr/ and labelsTr/ subdirectories inside: {input_path}"
-        )
+    # --- Locate NIfTI files (check roi_data/, else use input_path directly) ---
+    images_dir = os.path.join(input_path, "roi_data")
+    if os.path.isdir(images_dir):
+        logger.info(f"Found roi_data/ subdirectory: {images_dir}")
+    elif os.path.isdir(input_path):
+        logger.info(f"Using input_path directly for ROI files: {input_path}")
+        images_dir = input_path
+    else:
+        logger.error(f"Invalid input_path: {input_path}")
         sys.exit(1)
 
-    image_files = sorted([
+    roi_files = sorted([
         f for f in os.listdir(images_dir)
         if f.endswith(".nii.gz") or f.endswith(".nii")
     ])
 
-    if not image_files:
+    if not roi_files:
         logger.error(f"No NIfTI files found in {images_dir}")
         sys.exit(1)
 
-    out_dir = output_path
-    os.makedirs(out_dir, exist_ok=True)
-    logger.info(f"Test output directory: {out_dir}")
-    logger.info(f"Processing {len(image_files)} test case(s)...")
+    os.makedirs(output_path, exist_ok=True)
+    logger.info(f"Processing test ROIs (flat output)...")
+    logger.info(f"Input:  {images_dir}")
+    logger.info(f"Output: {output_path}")
+    logger.info(f"Total ROIs: {len(roi_files)}\n")
 
     tasks = []
-    for img_fname in image_files:
-        patient_id = img_fname.replace(".nii.gz", "").replace(".nii", "")
-        mask_path  = find_file(labels_dir, patient_id)
-        if mask_path is None:
-            logger.warning(f"No mask found for '{patient_id}' — skipping.")
-            continue
+    for roi_fname in roi_files:
+        patient_id = roi_fname.replace(".nii.gz", "").replace(".nii", "")
+        roi_path = os.path.join(images_dir, roi_fname)
         tasks.append({
             "patient_id":     patient_id,
             "split":          "test",
-            "tumor_type":     "unknown",      # placeholder — not used in output
-            "ct_path":        os.path.join(images_dir, img_fname),
-            "mask_path":      mask_path,
-            "out_dir":        out_dir,         # flat output, no class subfolder
+            "tumor_type":     "roi",           # placeholder (not used for flat output)
+            "roi_path":       roi_path,        # Path to ROI NIfTI file
+            "out_dir":        output_path,     # Flat output directory
             "target_spacing": target_spacing,
             "window_center":  window_center,
             "window_width":   window_width,
-            "bbox_margin":    bbox_margin,
             "output_format":  output_format,
             "png_axis":       png_axis,
-            "target_label":   target_label,
         })
 
     total_saved = total_failed = 0
     if num_workers > 1:
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             futures = {executor.submit(_process_one, t): t for t in tasks}
-            with tqdm(total=len(tasks), unit="sample", desc="Test preprocessing") as pbar:
+            with tqdm(total=len(tasks), unit="sample", desc="Processing") as pbar:
                 for future in as_completed(futures):
                     result = future.result()
                     _log_result(result, output_format, png_axis)
@@ -668,7 +564,7 @@ def prepare_test_dataset(
                         total_failed += 1
                     pbar.update(1)
     else:
-        for task in tqdm(tasks, unit="sample", desc="Test preprocessing"):
+        for task in tqdm(tasks, unit="sample", desc="Processing"):
             result = _process_one(task)
             _log_result(result, output_format, png_axis)
             if result["status"] == _OK:
@@ -678,8 +574,8 @@ def prepare_test_dataset(
 
     logger.info(f"\n{'='*60}")
     logger.info(f"Done.  Saved: {total_saved}  |  Failed/Skipped: {total_failed}")
-    logger.info(f"Test ROIs saved to: {output_path}")
-    logger.info(f"Pass this directory to the inference script via --input {output_path}")
+    logger.info(f"Processed ROIs saved to: {output_path}")
+    logger.info(f"Pass <output_path> to inference via: python evaluate.py --input {output_path} ...")
 
 
 def parse_args() -> argparse.Namespace:
@@ -689,9 +585,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input_path", required=True,
-        help="Directory containing imagesTr/ and labelsTr/ subdirectories. "
-             "Normal mode: must contain imagesTr/ and labelsTr/ directly (no split sub-folders). "
-             "Test mode (--test-mode): same layout, no CSV required.",
+        help="Directory containing ROI NIfTI files. "
+             "Expected: (1) <input_path>/roi_data/, or "
+             "(2) <input_path>/ with NIfTI files directly. "
+             "Train mode (with --labels_csv): organizes outputs by class. "
+             "Test mode (--test-mode): outputs flat structure.",
     )
     parser.add_argument(
         "--output_path", required=True,
@@ -704,10 +602,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--test-mode", action="store_true",
-        help="Process unlabelled test data (no CSV required). "
-             "--input_path should point to a folder containing imagesTr/ and labelsTr/. "
-             "Outputs saved to <output_path>/test/ as a flat list of .npy files, "
-             "ready for src/inferer.py --input.",
+        help="Process test data (outputs saved as flat structure, no class organization). "
+             "Use this for test ROI files; outputs are stored directly in <output_path>/ "
+             "without class subdirectories. Requires no --labels_csv.",
     )
     parser.add_argument(
         "--target_spacing", nargs=3, type=float, default=[1.0, 1.0, 1.0],
@@ -721,10 +618,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--window_width", type=int, default=400,
         help="Abdomen HU window width (lower = center - width/2, upper = center + width/2).",
-    )
-    parser.add_argument(
-        "--bbox_margin", type=int, default=0,
-        help="Extra voxel margin added around the mask bounding box on each side.",
     )
     parser.add_argument(
         "--output_format", choices=["npy", "png"], default="npy",
@@ -742,12 +635,6 @@ def parse_args() -> argparse.Namespace:
         help="Number of parallel worker processes. 1 = sequential (default). "
              "Set to os.cpu_count() or a fixed value for faster processing.",
     )
-    parser.add_argument(
-        "--target_label", type=int, default=None,
-        help="Mask label integer to isolate before computing the bounding box "
-             "(e.g. 4 for tumour in a 5-class liver mask). "
-             "Omit or set to None to use all nonzero voxels.",
-    )
     return parser.parse_args()
 
 
@@ -755,38 +642,34 @@ def main() -> None:
     args = parse_args()
 
     if args.test_mode:
-        # ---- Test mode: no labels, flat output ----
-        logger.info("Running in TEST MODE (no class labels required).")
+        # ---- Test mode: test ROI files ----
+        logger.info("Running in TEST MODE (processing ROI NIfTI files).")
         prepare_test_dataset(
             input_path     = args.input_path,
             output_path    = args.output_path,
             target_spacing = tuple(args.target_spacing),
             window_center  = args.window_center,
             window_width   = args.window_width,
-            bbox_margin    = args.bbox_margin,
             output_format  = args.output_format,
             png_axis       = args.png_axis,
             num_workers    = args.num_workers,
-            target_label   = args.target_label,
         )
     else:
         # ---- Normal mode: class-labelled training/val data ----
         if args.labels_csv is None:
             logger.error("--labels_csv is required for normal (training) mode. "
-                         "Use --test-mode for unlabelled test data.")
+                         "Use --test-mode for test ROI files.")
             sys.exit(1)
         prepare_dataset(
             input_path     = args.input_path,
             output_path    = args.output_path,
-            labels_csv       = args.labels_csv,
+            labels_csv     = args.labels_csv,
             target_spacing = tuple(args.target_spacing),
             window_center  = args.window_center,
             window_width   = args.window_width,
-            bbox_margin    = args.bbox_margin,
             output_format  = args.output_format,
             png_axis       = args.png_axis,
             num_workers    = args.num_workers,
-            target_label   = args.target_label,
         )
 
 

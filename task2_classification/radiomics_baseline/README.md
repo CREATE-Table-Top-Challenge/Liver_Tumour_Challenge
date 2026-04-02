@@ -43,25 +43,34 @@ This installs:
 
 ### Step 1: Extract Features (Train Data)
 
-Extract PyRadiomics texture features from CT images + segmentation masks:
+Extract PyRadiomics texture features from tumor ROI NIfTI files:
 
 ```bash
 python extract_features.py \
     --config config.yaml \
-    --images /path/to/dataset_train/imagesTr \
-    --masks  /path/to/dataset_train/labelsTr \
+    --rois /path/to/train/roi_data \
     --labels-csv /path/to/labels.csv \
     --output-csv features/train_features.csv
 ```
 
 **Arguments:**
-- `--images` — Directory with CT images (`*.nii.gz` or `*.nii`)
-- `--masks` — Directory with segmentation masks (same patient IDs as images) (`*.nii.gz` or `*.nii`)
+- `--rois` — Directory with ROI NIfTI files (*.nii.gz or *.nii)
 - `--labels-csv` — CSV mapping patient_id → class (required for train data)
 - `--output-csv` — Output CSV file with extracted features + class labels
 
 **Expected output:**  
 `features/train_features.csv` with columns: `patient_id`, feature columns (1000+), `class`
+
+### Step 1b: Extract Features (Test Data)
+
+```bash
+python extract_features.py \
+    --config config.yaml \
+    --rois /path/to/test/roi_data \
+    --output-csv features/test_features.csv
+```
+
+**Note:** No `--labels-csv` for test data. Output will have features only, no class column.
 
 ### Step 2: Train Classifier
 

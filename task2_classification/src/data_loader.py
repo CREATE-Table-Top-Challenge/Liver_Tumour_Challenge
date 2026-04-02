@@ -15,7 +15,7 @@ from sklearn.model_selection import KFold
 
 class ROIDataset(Dataset):
     """
-    Dataset for loading pre-cropped tumor ROIs.
+    Dataset for loading tumor ROIs.
     Expects directory structure: data_dir/class_name/*.npy
     """
     

@@ -1,35 +1,32 @@
 #!/usr/bin/env python
 """
-Step 1 — Feature Extraction
-============================
-Extract PyRadiomics features from CT NIfTI images and their segmentation masks.
-Run this once for train data (with --labels-csv) and once for test data (without).
+Step 1 — Feature Extraction from ROIs
+==================================================
+Extract PyRadiomics features from tumor ROI NIfTI files
+(ROIs are already masked and cropped).
 
-Usage — train data
-------------------
+Usage — train data (with class labels)
+--------------------------------------
     python extract_features.py \\
         --config config.yaml \\
-        --images /path/to/imagesTr \\
-        --masks  /path/to/labelsTr \\
+        --rois /path/to/train/roi_data \\
         --labels-csv /path/to/labels.csv \\
         --output-csv features/train_features.csv
 
-Usage — test data  (no --labels-csv; no 'class' column written)
----------------------------------------------------------------
+Usage — test data (no labels)
+-----------------------------
     python extract_features.py \\
         --config config.yaml \\
-        --images /path/to/imagesTs \\
-        --masks  /path/to/labelsTs \\
+        --rois /path/to/test/roi_data \\
         --output-csv features/test_features.csv
 
 Notes
 -----
-- Images and masks are matched by patient_id (filename without .nii / .nii.gz).
-- The mask label used as the tumour ROI is set by config['data']['label_value']
-  (default 2 = tumour in Task 1 output masks).
-- Override label_value with --label-value if needed.
+- ROI NIfTI files contain masked tumor regions.
+- For train data, --labels-csv is required and adds a 'class' column.
+- For test data, no labels are needed; output contains features only.
 - n_jobs in config['feature_extraction'] controls parallelism.
-  Set n_jobs: 1 on Windows to avoid multiprocessing issues with pyradiomics.
+  Set n_jobs: 1 on Windows to avoid multiprocessing issues.
 """
 import argparse
 import logging
@@ -52,10 +49,10 @@ from src.feature_extractor import RadiomicsExtractor
 # ---------------------------------------------------------------------------
 
 def _extract_one(args):
-    """Extract features for a single patient (picklable top-level function)."""
-    patient_id, image_path, mask_path, config = args
+    """Extract features for a single ROI (picklable top-level function)."""
+    patient_id, roi_path, config = args
     extractor = RadiomicsExtractor(config)
-    features  = extractor.extract(image_path, mask_path)
+    features  = extractor.extract_from_roi(roi_path)
     return patient_id, features
 
 
@@ -83,20 +80,16 @@ def _build_nii_map(directory):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract PyRadiomics features from NIfTI CT + mask pairs."
+        description="Extract PyRadiomics features from ROI NIfTI files."
     )
     parser.add_argument("--config",       default="config.yaml",
-                        help="Path to config.yaml  (default: config.yaml)")
-    parser.add_argument("--images",       required=True,
-                        help="Directory with <patient_id>.nii.gz CT images")
-    parser.add_argument("--masks",        required=True,
-                        help="Directory with <patient_id>.nii.gz segmentation masks")
+                        help="Path to config.yaml (default: config.yaml)")
+    parser.add_argument("--rois",         required=True,
+                        help="Directory with ROI NIfTI files (*.nii.gz or *.nii)")
     parser.add_argument("--labels-csv",   default=None,
                         help="CSV with patient_id + type/class column (train only)")
     parser.add_argument("--output-csv",   required=True,
                         help="Output feature CSV path")
-    parser.add_argument("--label-value",  type=int, default=None,
-                        help="Tumour label integer in mask (overrides config)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
@@ -105,23 +98,19 @@ def main():
     with open(args.config) as fh:
         config = yaml.safe_load(fh)
 
-    if args.label_value is not None:
-        config["data"]["label_value"] = args.label_value
-
-    # Build patient-id → file-path maps and find the intersection
-    image_map = _build_nii_map(args.images)
-    mask_map  = _build_nii_map(args.masks)
-    patient_ids = sorted(set(image_map) & set(mask_map))
+    # Build ROI file map
+    roi_map = _build_nii_map(args.rois)
+    patient_ids = sorted(roi_map.keys())
 
     if not patient_ids:
         logging.error(
-            "No matching image/mask pairs found.  "
-            "Check that --images and --masks point to directories with "
-            "matching .nii.gz filenames."
+            "No ROI NIfTI files found in %s. "
+            "Check that the directory contains .nii.gz or .nii files.",
+            args.rois
         )
         sys.exit(1)
 
-    logging.info("Found %d image/mask pairs.", len(patient_ids))
+    logging.info("Found %d ROI files.", len(patient_ids))
 
     # Optional label map (for train data)
     labels: dict = {}
@@ -134,7 +123,7 @@ def main():
     # Feature extraction
     n_jobs = config.get("feature_extraction", {}).get("n_jobs", 1)
     tasks  = [
-        (pid, image_map[pid], mask_map[pid], config)
+        (pid, roi_map[pid], config)
         for pid in patient_ids
     ]
 

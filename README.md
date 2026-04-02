@@ -80,26 +80,39 @@ pip install pyradiomics scikit-learn xgboost pandas joblib PyYAML tqdm
 
 ### Download Data
 
-**Training Data** → Available during challenge start
-- CT images: `imagesTr/` directory
-- Segmentation masks: `labelsTr/` directory
-- Labels CSV: `train.csv` (maps patient IDs to types)
+**Dataset Link:** [CREATE Challenge Dataset on SharePoint](https://queensuca-my.sharepoint.com/:f:/g/personal/23ws9_queensu_ca/IgBCzxn9AJFZTo8SETBTIqhKAdf1vNFKUlaL59eH_IdI3x8?e=yonBuc)
+
+> 📧 **Password:** Sent to your group email on challenge start date. Check your inbox!
+
+**Dataset Structure:**
+- `task1_data/` — Task 1 training data (CT images + segmentation masks)
+- `task2_data/` — Task 2 training data (Tumor ROI files + labels CSV)
 
 **Test Data** → Available on test data release date
-- CT images only (unlabeled)
+
+**What's Inside:**
+
+**Task 1 Training Data:**
+- `imagesTr/` — 3D CT scans (.nii.gz)
+- `labelsTr/` — Segmentation masks (.nii.gz)
+
+**Task 2 Training Data:**
+- `roi_data/` — Tumor ROI NIfTI files (.nii.gz)
+- `labels.csv` — Maps patient IDs to tumor types
 
 ### Data Structure
+
+#### Task 1
 ```
-raw_data/
+task1_data/
 ├── imagesTr/            # 3D CT scans (.nii.gz)
 │   ├── case_001.nii.gz
 │   ├── case_002.nii.gz
 │   └── ...
-├── labelsTr/            # Segmentation masks (.nii.gz)
-│   ├── case_001.nii.gz
-│   ├── case_002.nii.gz
-│   └── ...
-└── train.csv       # Patient → Tumour Type mapping
+└── labelsTr/            # Segmentation masks (.nii.gz)
+    ├── case_001.nii.gz
+    ├── case_002.nii.gz
+    └── ...
 ```
 
 **Labels in segmentation masks:**
@@ -107,12 +120,28 @@ raw_data/
 - `1` = Liver
 - `2` = Tumour
 
-**Tumour types in CSV:**
+#### Task 2
+```
+task2_data/
+├── roi_data/            # Tumor ROI NIfTI files (.nii.gz)
+│   ├── case_001.nii.gz
+│   ├── case_002.nii.gz
+│   └── ...
+└── labels.csv          # Patient → Tumor Type mapping
+```
+
+**Tumor types in CSV:**
 - HCC (Hepatocellular carcinoma)
 - ICC (Intrahepatic cholangiocarcinoma)
 - CRLM (Colorectal liver metastases)
 - BCLM (Breast cancer liver metastases)
 - HH (Hemangioma)
+
+---
+
+### ⚠️ Important Data Rules
+
+- **Task 2 ROI test data cannot be used for training Task 1.** Task 1 training must use only the full CT volumes in `task1_data/`. Any use of Task 2 test ROI data for Task 1 training will result in disqualification.
 
 ---
 
@@ -197,14 +226,12 @@ python evaluate.py \
 - **ZIP File Submission:** `group<N>_task1_results.zip` containing predicted masks for test cases.
 - **Logs:** Training curves and detailed metrics
 
-> ⚠️ **Important:** Task 1 predictions are used to extract ROIs for Task 2. Save your predicted masks - you'll need them for Task 2 test data preprocessing (see [Task 2: Prepare Test Data](#step-1-prepare-test-data-roi-extraction)).
-
 ---
 
 ## 🎯 Task 2: Liver Tumour Type Prediction
 
 ### Objective
-Classify tumour type (HCC, ICC, CRLM, BCLM, HH) from cropped tumour ROIs extracted using segmentation masks.
+Classify tumour type (HCC, ICC, CRLM, BCLM, HH) from tumour ROIs.
 
 ### Evaluation Metric
 - **Primary:** Macro-averaged F1 score — higher is better
@@ -212,66 +239,61 @@ Classify tumour type (HCC, ICC, CRLM, BCLM, HH) from cropped tumour ROIs extract
 
 ### Quick Start
 
-#### Step 1: Prepare Training Data (ROI Extraction)
+#### Step 1: Preprocess Training Data
+
 ```bash
 cd task2_classification
 
-# Extract tumour ROIs from training data using ground truth masks
+# Resample, window, and convert ROIs to .npy
 python prepare_dataset_for_task2.py \
-    --input_path /path/to/raw_data \
-    --output_path /path/to/processed_data \
-    --labels_csv /path/to/train.csv \
-    --target_label 2 \
-    --bbox_margin 5 \
+    --input_path /path/to/train \
+    --output_path /path/to/processed_train \
+    --labels_csv /path/to/labels.csv \
+    --target_spacing 1.0 1.0 1.0 \
+    --window_center 40 \
+    --window_width 400 \
     --num_workers 8
 ```
 
 **This creates:**
 ```
-processed_data/
-├── HCC/          # Tumour ROIs (.npy files)
+processed_train/
+├── HCC/          # Preprocessed ROI numpy arrays
 ├── ICC/
-├── CRLM/
+├── CRLM/  
 ├── BCLM/
 └── HH/
 ```
 
-#### Step 1b: Prepare Test Data (ROI Extraction using Task 1 Predictions)
-
-**Important workflow:** Task 1 predicted segmentation masks are used to extract ROIs for test data:
+#### Step 1b: Preprocess Test Data
 
 ```bash
-cd task2_classification
-
-# Extract tumour ROIs from test data using PREDICTED masks from Task 1
-# Note: Use --test-mode flag for test data (no labels CSV)
 python prepare_dataset_for_task2.py \
-    --input_path /path/to/test_data \
-    --output_path /path/to/test_processed_data \
-    --target_label 2 \
-    --bbox_margin 5 \
-    --num_workers 8 \
-    --test-mode
+    --input_path /path/to/test \
+    --output_path /path/to/processed_test \
+    --test-mode \
+    --target_spacing 1.0 1.0 1.0 \
+    --window_center 40 \
+    --window_width 400 \
+    --num_workers 8
 ```
 
-> 📌 **Note:** The test ROI extraction uses predicted segmentation masks from Task 1 (store them in `labelsTr/` directory alongside test images). The `--test-mode` flag indicates test data processing (no labels CSV required). Ensure your Task 1 model predictions are saved in NIfTI format (in `labelsTr/` directory) in the same directory as the test CT images.
+**Output:** Flat directory of preprocessed test ROIs (no class subdirectories).
 
 #### Key Arguments for Preprocessing
 
 | Argument | Description |
 |---|---|
-| `--input_path` | Path containing `imagesTr/` and `labelsTr/` subdirectories |
+| `--input_path` | Path containing `roi_data/` OR ROI files directly |
 | `--output_path` | Root directory where processed ROIs will be saved |
-| `--labels_csv` | CSV file with columns `patient_id` and `type` (required for training; not used with `--test-mode`) |
+| `--labels_csv` | CSV file with columns `patient_id` and `type` (required for training) |
 | `--test-mode` | Flag to process unlabelled test data (no CSV required) |
-| `--target_label` | Mask label to isolate before computing bounding box (e.g., 2 for tumour) |
-| `--target_spacing` | Resample to isotropic spacing (mm) |
-| `--window_center` | HU window center for CT clipping (should match `transforms.py` values) |
-| `--window_width` | HU window width (should match `transforms.py` values; range = [center - width/2, center + width/2]) |
-| `--bbox_margin` | Extra voxel margin around bounding box on each side |
-| `--num_workers` | Number of parallel worker processes |
-| `--output_format` | Output format: `npy` or `png` |
+| `--target_spacing` | Resample to isotropic spacing in mm (default 1.0 1.0 1.0) |
+| `--window_center` | HU window center (default 40) |
+| `--window_width` | HU window width (default 400; range = [center - width/2, center + width/2]) |
+| `--output_format` | Output format: `npy` (default) or `png` |
 | `--png_axis` | Axis to slice along for PNG output (0=axial, 1=coronal, 2=sagittal) |
+| `--num_workers` | Number of parallel worker processes (default 1) |
 
 #### Step 2: Train Classifier
 ```bash
@@ -382,18 +404,18 @@ src/
 
 ### Workflow Overview
 
-**Tasks 1 and 2 are independent during training.** Task 1 predictions are only needed for preprocessing Task 2 test data:
+**Tasks 1 and 2 are completely independent** — you can work on either or both in parallel. No dependencies between tasks:
 
 ```
-Training Phase (Parallel):
+Training Phase (Fully Parallel):
 ├─ Train Task 1 model (see Task 1: Quick Start)
 └─ Train Task 2 model (see Task 2: Quick Start)
 
-Evaluation & Submission Phase (Sequential):
+Evaluation & Submission Phase (Fully Parallel):
 ├─ Evaluate Task 1 on test data → generates predictions
-├─ Use Task 1 predictions to preprocess Task 2 test data
-├─ Evaluate Task 2 on test ROIs
-└─ Submit both results
+│  └─ Submit: group<N>_task1_results.zip
+└─ Evaluate Task 2 on test data → generates predictions
+   └─ Submit: group<N>_task2_results.csv
 ```
 
 ### Submission Files
@@ -423,11 +445,11 @@ Evaluation & Submission Phase (Sequential):
 - [ ] Task 1: Model trained and checkpoint saved
 - [ ] Task 1: Predictions generated for test set
 - [ ] Task 1: `group<N>_task1_results.zip` created
-- [ ] Task 2: ROIs extracted from test data
+- [ ] Task 2: ROIs preprocessed (resampled, windowed, converted to .npy)
 - [ ] Task 2: Model trained and checkpoint saved
 - [ ] Task 2: Predictions generated for test set
 - [ ] Task 2: `group<N>_task2_results.csv` created
-- [ ] Both tasks: Predictions in correct format and directory
+- [ ] Both tasks: Results in correct format and ready for submission
 ---
 
 **Good luck! 🚀**  
