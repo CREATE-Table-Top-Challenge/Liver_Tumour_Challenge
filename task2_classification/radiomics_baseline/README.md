@@ -39,11 +39,31 @@ This installs:
 
 ---
 
+## Data Format
+
+### Input: Pre-Extracted Tumor ROIs
+
+The radiomics baseline expects **pre-extracted tumor ROI NIfTI files** (already prepared by the organizer):
+
+**Preprocessing applied by organizer:**
+- ✅ Resampled to 1mm³ isotropic spacing (physical space)
+- ✅ Cropped and padded to uniform size: (432, 354, 74) voxels
+- ✅ Tumor region masked (non-tumor background = -1024 HU)
+
+**Binary mask creation (on-the-fly):**
+- The feature extraction script automatically creates a binary mask from each ROI:
+  - Void/background voxels: -1024 HU (padding applied by organizer)
+  - Tumor voxels: > -1024 HU (anything in the tumor ROI)
+  - Binary mask: `binary_mask = (roi > -1024).astype(uint8)` → 1 = tumor, 0 = background
+- This binary mask is passed to PyRadiomics for feature extraction
+
+---
+
 ## Workflow
 
 ### Step 1: Extract Features (Train Data)
 
-Extract PyRadiomics texture features from tumor ROI NIfTI files:
+Extract PyRadiomics texture features from tumor ROI NIfTI files.
 
 ```bash
 python extract_features.py \
@@ -54,9 +74,16 @@ python extract_features.py \
 ```
 
 **Arguments:**
-- `--rois` — Directory with ROI NIfTI files (*.nii.gz or *.nii)
+- `--rois` — Directory with pre-extracted ROI NIfTI files (*.nii.gz or *.nii)
+  - ROIs are already resampled to 1mm³ and padded
+  - Void/background voxels are at -1024 HU (padding from organizer)
 - `--labels-csv` — CSV mapping patient_id → class (required for train data)
 - `--output-csv` — Output CSV file with extracted features + class labels
+
+**How it works:**
+1. Loads each ROI NIfTI file
+2. Extracts radiomics features
+3. Saves features to CSV with class labels
 
 **Expected output:**  
 `features/train_features.csv` with columns: `patient_id`, feature columns (1000+), `class`

@@ -2,14 +2,14 @@
 # Baseline configuration using MONAI ResNet-18 architecture.
 # Switch architectures by changing model_type (resnet18 | resnet50 | densenet121).
 
-experiment_name: "baseline_resnet18"
+experiment_name: "baseline_resnet50"
 group_number: 0  # Your group number — used to name the output CSV (e.g. group0_task2_results.csv)
 
 # Model architecture
 model:
-  model_type: "resnet18"  # Options: resnet18 | resnet50 | densenet121
+  model_type: "resnet50"  # Options: resnet18 | resnet50 | densenet121
   num_classes: 5
-  # Class names in label-index order (assigned alphabetically by ROIDataset):
+  # Class names in label-index order (assigned alphabetically by NIfTIDataset):
   #   0: BCLM  (Breast Cancer Liver Metastasis)
   #   1: CRLM  (Colorectal Cancer Liver Metastasis)
   #   2: HCC   (Hepatocellular Carcinoma)
@@ -22,8 +22,8 @@ model:
     - HH
     - ICC
   pretrained: true  # Set to true if using ImageNet pretrained weights
-  learning_rate: 1e-1
-  weight_decay: 1e-1
+  learning_rate: 1e-3
+  weight_decay: 1e-5
 
   # Architecture-specific parameters — only the block matching model_type is used.
   resnet18:
@@ -41,33 +41,30 @@ model:
 
 # Training parameters
 training:
-  epochs: 1
-  batch_size: 2
-  num_workers: 1
+  epochs: 600
+  batch_size: 16
+  num_workers: 2
   validation_interval: 1
-  patience: 1
+  patience: 50
   # Cross-validation: set k_folds > 1 to enable stratified k-fold CV.
   # When enabled, train_val_split is ignored; each fold uses (k-1)/k data
   # for training and 1/k for validation. A fresh model is trained per fold.
   k_folds: 1          # 0 or 1 = standard single split; 5 = 5-fold CV
+  
+  # Spatial size for resizing ROIs (z, y, x) order (default: 64x64x64 for GPU memory).
+  # Pre-extracted ROI size is (74, 354, 432). Reduce for faster training, increase for better metrics.
+  spatial_size: [96, 96, 96]
+  
+  # Enable data augmentation during training (rotation, flip, noise, contrast).
+  enable_augmentation: true
 
 # Data paths
 data:
-  train_dir: "./processed_data"
+  train_dir: "./../../dataset/task2_data/roi_data"
+  labels_csv: "./../../dataset/task2_data/labels.csv"
   val_dir: null
   train_val_split: 0.8
-
-# Standard augmentation for baseline
-augmentation:
-  random_flip_prob: 0.5
-  random_rotate_prob: 0.5
-  random_rotate_range: 10
-  adjust_contrast_prob: 0.5
-  contrast_range: [0.8, 1.2]
-  adjust_brightness_prob: 0.5
-  brightness_delta: 0.1
-  gaussian_noise_prob: 0.3
-  gaussian_noise_std: 0.01
+  enable_stratified_split: true  # Use stratified splitting to ensure balanced class distribution in train/val
 
 # Optimizer
 optimizer:

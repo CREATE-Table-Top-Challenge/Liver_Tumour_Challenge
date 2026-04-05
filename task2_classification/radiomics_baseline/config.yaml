@@ -53,18 +53,14 @@ data:
     - HH     # index 3
     - ICC    # index 4
 
-  # Integer label in the segmentation mask that corresponds to the tumour ROI.
-  # Task 1 output masks:  0 = Background  1 = Liver  2 = Tumour  →  use 2
-  label_value: 2
-
 # ---------------------------------------------------------------------------
 # Feature Extraction  (used by extract_features.py)
 # ---------------------------------------------------------------------------
 feature_extraction:
   resampling:
-    enabled: true
-    # Resample image + mask to this isotropic voxel spacing (mm) before
-    # feature extraction.  Use the same spacing for train and test.
+    enabled: false
+    # ROI data is already resampled to 1mm³ isotropic spacing.
+    # No need to resample again.  Set to true only if using raw CT + mask pairs.
     target_spacing: [1.0, 1.0, 1.0]
     # Interpolation for the CT image.  Mask always uses nearest-neighbour.
     # Options: sitkBSpline | sitkLinear | sitkNearestNeighbor
@@ -161,7 +157,7 @@ training:
 # Adjust the param_grid to match the active classifier.
 fine_tuning:
   enabled: true
-  cv: 3               # inner CV folds for the grid search
+  cv: 5               # inner CV folds for the grid search
   scoring: "f1_macro"
   param_grid:
     classifier__n_estimators: [100, 300]

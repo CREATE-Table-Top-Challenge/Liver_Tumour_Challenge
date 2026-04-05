@@ -58,7 +58,9 @@ def parse_args():
     
     # Data paths
     parser.add_argument('--data_dir', type=str, help='Path to training data directory')
+    parser.add_argument('--labels_csv', type=str, help='Path to labels CSV file')
     parser.add_argument('--val_dir', type=str, help='Path to validation data directory (optional)')
+    parser.add_argument('--val_labels_csv', type=str, help='Path to validation labels CSV (required if val_dir is specified)')
     
     # Model parameters
     parser.add_argument('--model_type', type=str,
@@ -151,8 +153,12 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
     if 'data' in config:
         if args.data_dir is None and 'train_dir' in config['data']:
             args.data_dir = config['data']['train_dir']
+        if args.labels_csv is None and 'labels_csv' in config['data']:
+            args.labels_csv = config['data']['labels_csv']
         if args.val_dir is None and 'val_dir' in config['data']:
             args.val_dir = config['data']['val_dir']
+        if args.val_labels_csv is None and 'val_labels_csv' in config['data']:
+            args.val_labels_csv = config['data']['val_labels_csv']
         if args.train_val_split is None and 'train_val_split' in config['data']:
             args.train_val_split = config['data']['train_val_split']
     
@@ -254,10 +260,13 @@ def run_cv_training(args, full_dataset, device):
 
     logging.info(f"Starting {args.k_folds}-fold stratified cross-validation")
 
-    folds = create_cv_folds(full_dataset, n_splits=args.k_folds, random_seed=args.seed)
+    enable_stratified_split = args._config.get("data", {}).get("enable_stratified_split", True)
+    folds = create_cv_folds(full_dataset, n_splits=args.k_folds, random_seed=args.seed, enable_stratified_split=enable_stratified_split)
 
-    train_transforms = get_train_transforms()
-    val_transforms   = get_val_transforms()
+    spatial_size = args._config.get("training", {}).get("spatial_size", None)
+    enable_augmentation = args._config.get("training", {}).get("enable_augmentation", True)
+    train_transforms = get_train_transforms(spatial_size=spatial_size, enable_augmentation=enable_augmentation)
+    val_transforms   = get_val_transforms(spatial_size=spatial_size)
 
     fold_results = []   # list of dicts with best val metrics per fold
 
@@ -474,7 +483,9 @@ def main():
     
     # Load data (always without transforms at this stage)
     logging.info("Loading data...")
-    full_dataset = load_data(args.data_dir, transforms=None)
+    if not args.labels_csv:
+        raise ValueError("labels_csv is required. Provide via --labels_csv or config file")
+    full_dataset = load_data(args.data_dir, args.labels_csv, transforms=None)
 
     # ------------------------------------------------------------------ #
     # Cross-validation path
@@ -490,21 +501,29 @@ def main():
     if args.val_dir:
         # Separate train and val directories
         logging.info(f"Loading separate validation data from {args.val_dir}")
-        train_transforms = get_train_transforms()
-        val_transforms = get_val_transforms()
+        if not args.val_labels_csv:
+            raise ValueError("val_labels_csv is required when using val_dir")
+        spatial_size = args._config.get("training", {}).get("spatial_size", None)
+        enable_augmentation = args._config.get("training", {}).get("enable_augmentation", True)
+        train_transforms = get_train_transforms(spatial_size=spatial_size, enable_augmentation=enable_augmentation)
+        val_transforms = get_val_transforms(spatial_size=spatial_size)
 
-        train_dataset = load_data(args.data_dir, transforms=train_transforms)
-        val_dataset   = load_data(args.val_dir,   transforms=val_transforms)
+        train_dataset = load_data(args.data_dir, args.labels_csv, transforms=train_transforms)
+        val_dataset   = load_data(args.val_dir, args.val_labels_csv, transforms=val_transforms)
     else:
         # Stratified split
         logging.info(f"Splitting training data with ratio {args.train_val_split}")
+        enable_stratified_split = args._config.get("data", {}).get("enable_stratified_split", True)
         train_subset, val_subset = split_dataset(
             full_dataset,
             train_ratio=args.train_val_split,
             random_seed=args.seed,
+            enable_stratified_split=enable_stratified_split,
         )
-        train_transforms = get_train_transforms()
-        val_transforms   = get_val_transforms()
+        spatial_size = args._config.get("training", {}).get("spatial_size", None)
+        enable_augmentation = args._config.get("training", {}).get("enable_augmentation", True)
+        train_transforms = get_train_transforms(spatial_size=spatial_size, enable_augmentation=enable_augmentation)
+        val_transforms   = get_val_transforms(spatial_size=spatial_size)
         train_dataset = TransformSubset(train_subset, train_transforms)
         val_dataset   = TransformSubset(val_subset,   val_transforms)
     

@@ -97,7 +97,7 @@ pip install pyradiomics scikit-learn xgboost pandas joblib PyYAML tqdm
 - `labelsTr/` — Segmentation masks (.nii.gz)
 
 **Task 2 Training Data:**
-- `roi_data/` — Tumor ROI NIfTI files (.nii.gz)
+- `roi_data/` — Pre-extracted tumor ROI NIfTI files (.nii.gz, resampled to 1mm³ and padded to uniform size)
 - `labels.csv` — Maps patient IDs to tumor types
 
 ### Data Structure
@@ -120,14 +120,14 @@ task1_data/
 - `1` = Liver
 - `2` = Tumour
 
-#### Task 2
+#### Task 2 Training Data:
 ```
 task2_data/
-├── roi_data/            # Tumor ROI NIfTI files (.nii.gz)
+├── roi_data/            # Pre-extracted Tumor ROI NIfTI files (.nii.gz)
 │   ├── case_001.nii.gz
 │   ├── case_002.nii.gz
 │   └── ...
-└── labels.csv          # Patient → Tumor Type mapping
+└── labels.csv          # Patient ID → Tumor Type mapping
 ```
 
 **Tumor types in CSV:**
@@ -233,72 +233,31 @@ python evaluate.py \
 ### Objective
 Classify tumour type (HCC, ICC, CRLM, BCLM, HH) from tumour ROIs.
 
+**Note:** Pre-extracted ROI data (resampled to 1mm³ and padded to uniform size) is loaded directly from NIfTI files.
+
 ### Evaluation Metric
 - **Primary:** Macro-averaged F1 score — higher is better
 - **Secondary:** Macro-averaged AUROC — higher is better
 
 ### Quick Start
 
-#### Step 1: Preprocess Training Data
-
+#### Step 1: Train Classifier
 ```bash
 cd task2_classification
 
-# Resample, window, and convert ROIs to .npy
-python prepare_dataset_for_task2.py \
-    --input_path /path/to/train \
-    --output_path /path/to/processed_train \
-    --labels_csv /path/to/labels.csv \
-    --target_spacing 1.0 1.0 1.0 \
-    --window_center 40 \
-    --window_width 400 \
-    --num_workers 8
-```
-
-**This creates:**
-```
-processed_train/
-├── HCC/          # Preprocessed ROI numpy arrays
-├── ICC/
-├── CRLM/  
-├── BCLM/
-└── HH/
-```
-
-#### Step 1b: Preprocess Test Data
-
-```bash
-python prepare_dataset_for_task2.py \
-    --input_path /path/to/test \
-    --output_path /path/to/processed_test \
-    --test-mode \
-    --target_spacing 1.0 1.0 1.0 \
-    --window_center 40 \
-    --window_width 400 \
-    --num_workers 8
-```
-
-**Output:** Flat directory of preprocessed test ROIs (no class subdirectories).
-
-#### Key Arguments for Preprocessing
-
-| Argument | Description |
-|---|---|
-| `--input_path` | Path containing `roi_data/` OR ROI files directly |
-| `--output_path` | Root directory where processed ROIs will be saved |
-| `--labels_csv` | CSV file with columns `patient_id` and `type` (required for training) |
-| `--test-mode` | Flag to process unlabelled test data (no CSV required) |
-| `--target_spacing` | Resample to isotropic spacing in mm (default 1.0 1.0 1.0) |
-| `--window_center` | HU window center (default 40) |
-| `--window_width` | HU window width (default 400; range = [center - width/2, center + width/2]) |
-| `--output_format` | Output format: `npy` (default) or `png` |
-| `--png_axis` | Axis to slice along for PNG output (0=axial, 1=coronal, 2=sagittal) |
-| `--num_workers` | Number of parallel worker processes (default 1) |
-
-#### Step 2: Train Classifier
-```bash
 # Using configuration file (recommended)
 python train.py --config baseline_config.yaml
+
+# OR specify paths directly:
+python train.py \
+    --data_dir /path/to/roi_data \
+    --labels_csv /path/to/labels.csv \
+    --max_epochs 100 \
+    --batch_size 16 \
+    --learning_rate 1e-4 \
+    --model_type resnet18 \
+    --k_folds 5 \
+    --output_dir ./model_checkpoints
 ```
 
 #### Key Arguments for Training
@@ -306,8 +265,10 @@ python train.py --config baseline_config.yaml
 | Argument | Description |
 |---|---|
 | `--config` | Configuration file |
-| `--data_dir` | Path to processed ROIs (with class subdirs: HCC/, ICC/, etc.) |
-| `--val_dir` | Separate validation directory (if not provided, uses `--train_val_split`) |
+| `--data_dir` | Path to directory containing NIfTI ROI files |
+| `--labels_csv` | Path to CSV file with columns: patient_id, type |
+| `--val_dir` | Separate validation data directory (if not provided, uses `--train_val_split`) |
+| `--val_labels_csv` | CSV file for validation data (required if `--val_dir` is specified) |
 | `--model_type` | Model architecture: `resnet18`, `resnet50`, or `densenet121` |
 | `--num_classes` | Number of output classes |
 | `--pretrained` | Use ImageNet pretrained weights (set to `true`) |
@@ -325,12 +286,13 @@ python train.py --config baseline_config.yaml
 | `--seed` | Random seed for reproducibility |
 | `--resume_from` | Path to checkpoint to resume training from |
 
-#### Step 3: Evaluate on Test Set
+#### Step 2: Evaluate on Test Set
 ```bash
 python evaluate.py \
     --config baseline_config.yaml \
-    --input ./test_processed_data \
-    --output ./predictions
+    --input /path/to/test/roi_data \
+    --output ./predictions \
+    --group 1
 ```
 
 #### Key Arguments for Evaluation
@@ -338,7 +300,7 @@ python evaluate.py \
 | Argument | Description |
 |---|---|
 | `--config` | Configuration file with model settings |
-| `--input` | Path to test ROIs directory (output of `prepare_dataset_for_task2.py --test-mode`) |
+| `--input` | Path to test ROI NIfTI files |
 | `--output` | Directory where `predictions.csv` will be saved |
 | `--models-dir` | Directory containing `cv_results.json` (ensemble) or `best_model.pth` (single model) |
 | `--model` | Explicit path to single `.pth` checkpoint (overrides `--models-dir`) |
@@ -347,6 +309,87 @@ python evaluate.py \
 | `--classes` | Class names in order (from config or override) |
 | `--device` | Device to use: `cuda` or `cpu` |
 | `--group` | Group number for output filename (e.g., 1 → `group1_task2_results.csv`) |
+
+---
+
+## Alternative: 2D Dataset Approach
+
+Instead of using 3D models, you can extract 2D slices from the ROI volumes and train 2D CNN models. This approach reduces memory requirements and allows leveraging pre-trained 2D models.
+
+### Extract 2D Slices
+
+```bash
+cd task2_classification
+
+# Training data with labels
+python prepare_2d_dataset_for_task2.py \
+    --input_path /path/to/roi_data \
+    --output_path /path/to/2d_dataset \
+    --labels_csv /path/to/labels.csv \
+    --slice_strategy "middle_n" \
+    --num_slices 5 \
+    --num_workers 8
+```
+
+**Output structure:**
+```
+2d_dataset/
+├── patient_001/
+│   ├── 000.png
+│   ├── 001.png
+│   ├── 002.png
+│   └── 003.png
+├── patient_002/
+│   ├── 000.png
+│   ├── 001.png
+│   └── ...
+└── ...
+```
+
+### Slice Selection Strategies
+
+All strategies automatically exclude empty slices and only include them if insufficient non-empty slices exist to meet the target count.
+
+| Strategy | Description | Use Case |
+|---|---|---|
+| `all_nonempty` | All non-empty slices | Maximum meaningful data |
+| `middle_n` | Middle N non-empty slices centered around volume | Balanced, captures tumor center |
+| `center_single` | Single center non-empty slice | Fastest, minimal information |
+| `equidistant` | N equally spaced non-empty slices | Balanced distribution across volume |
+
+### Prepare Test Data
+
+```bash
+python prepare_2d_dataset_for_task2.py \
+    --input_path /path/to/test_roi_data \
+    --output_path /path/to/2d_test_dataset \
+    --test-mode \
+    --slice_strategy "middle_n" \
+    --num_slices 5
+```
+
+### Key Arguments for 2D Dataset Preparation
+
+| Argument | Description |
+|---|---|
+| `--input_path` | Directory containing NIfTI ROI files or `roi_data/` subdirectory |
+| `--output_path` | Output directory (organized by patient_id/) |
+| `--labels_csv` | CSV with `patient_id` and `type` columns (required for training) |
+| `--test-mode` | Process test data without labels |
+| `--slice_strategy` | Strategy for slice selection: `all_nonempty`, `middle_n`, `center_single`, `equidistant` |
+| `--num_slices` | Number of slices for `middle_n` and `equidistant` strategies (default: 5) |
+| `--window_center` | HU window center (default: 40 for abdomen soft-tissue) |
+| `--window_width` | HU window width (default: 400, clips to [−160, 240]) |
+| `--num_workers` | Number of parallel worker processes |
+
+### Next Steps
+
+Once slices are extracted:
+1. Train 2D models (ResNet, DenseNet, etc.) on the extracted slices
+2. Aggregate predictions across slices (average, majority vote, or attention-based)
+3. Generate final patient-level predictions
+
+---
 
 ### Output
 
@@ -380,7 +423,7 @@ src/
 ├── task2_classification/
 │   ├── train.py                       # Training with k-fold CV
 │   ├── evaluate.py                    # Evaluation script
-│   ├── prepare_dataset_for_task2.py   # ROI extraction
+│   ├── prepare_2d_dataset_for_task2.py # Extract 2D slices for 2D models
 │   ├── baseline_config.yaml           # Baseline configuration
 │   ├── src/
 │   │   ├── model.py                   # Model factory
@@ -445,7 +488,6 @@ Evaluation & Submission Phase (Fully Parallel):
 - [ ] Task 1: Model trained and checkpoint saved
 - [ ] Task 1: Predictions generated for test set
 - [ ] Task 1: `group<N>_task1_results.zip` created
-- [ ] Task 2: ROIs preprocessed (resampled, windowed, converted to .npy)
 - [ ] Task 2: Model trained and checkpoint saved
 - [ ] Task 2: Predictions generated for test set
 - [ ] Task 2: `group<N>_task2_results.csv` created

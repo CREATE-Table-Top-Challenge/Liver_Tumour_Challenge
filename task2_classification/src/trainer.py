@@ -113,7 +113,7 @@ class Trainer:
         if not epochs:
             return
 
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        fig, axes = plt.subplots(1, 2, figsize=(9, 4))
         fig.suptitle('Training Progress', fontsize=14, fontweight='bold', y=1.01)
 
         # --- Loss subplot ---

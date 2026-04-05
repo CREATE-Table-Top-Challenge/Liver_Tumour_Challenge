@@ -1,9 +1,16 @@
 #!/usr/bin/env python
 """
-Step 1 — Feature Extraction from ROIs
+Step 1 — Feature Extraction from Pre-Extracted ROIs
 ==================================================
-Extract PyRadiomics features from tumor ROI NIfTI files
-(ROIs are already masked and cropped).
+Extract PyRadiomics features from tumor ROI NIfTI files.
+
+The script automatically creates a binary mask from each ROI on-the-fly:
+- ROIs are pre-extracted, resampled to 1mm³, and padded to uniform size
+- Void/background voxels are -1024 HU
+- Binary mask created as: binary_mask = (roi > -1024).astype(uint8)
+  - Excludes void voxels (-1024 HU)
+  - Includes all tumor voxels (any value > -1024 HU)
+- Radiomics features extracted using this binary mask
 
 Usage — train data (with class labels)
 --------------------------------------
@@ -22,7 +29,8 @@ Usage — test data (no labels)
 
 Notes
 -----
-- ROI NIfTI files contain masked tumor regions.
+- ROI NIfTI files are pre-extracted tumor regions (already masked and cropped).
+- Binary mask is created on-the-fly from each ROI (no separate mask file needed).
 - For train data, --labels-csv is required and adds a 'class' column.
 - For test data, no labels are needed; output contains features only.
 - n_jobs in config['feature_extraction'] controls parallelism.
@@ -157,10 +165,11 @@ def main():
     else:
         # Sequential extraction (safer on Windows / debugging)
         extractor = RadiomicsExtractor(config)
-        for pid, image_path, mask_path, _ in tqdm(tasks,
-                                                   desc="Extracting",
-                                                   unit="patient"):
-            features = extractor.extract(image_path, mask_path)
+        for pid, roi_path, _ in tqdm(tasks,
+                                      desc="Extracting",
+                                      unit="patient"):
+            # extract_from_roi creates binary mask on-the-fly from NIfTI ROI
+            features = extractor.extract_from_roi(roi_path)
 
             if features is None:
                 failed.append(pid)
@@ -175,8 +184,7 @@ def main():
     if not rows:
         logging.error(
             "No features were successfully extracted.  "
-            "Check label_value (currently %d) and mask files.",
-            config["data"]["label_value"],
+            "Check that ROI files are valid NIfTI format and contain tumor data."
         )
         sys.exit(1)
 

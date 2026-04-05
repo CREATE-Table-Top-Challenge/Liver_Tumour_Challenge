@@ -41,8 +41,7 @@ class RadiomicsExtractor:
         # installed (unit tests, doc generation, etc.)
         from radiomics import featureextractor as _fe
 
-        fe_cfg           = config.get("feature_extraction", {})
-        self._label_value = config["data"]["label_value"]
+        fe_cfg = config.get("feature_extraction", {})
 
         # Construct extractor with no args, then apply settings directly.
         # Passing a flat dict as a positional arg triggers pykwalify schema
@@ -53,12 +52,12 @@ class RadiomicsExtractor:
         s["binWidth"]       = fe_cfg.get("bin_width",       25)
         s["normalize"]      = fe_cfg.get("normalize",       False)
         s["normalizeScale"] = fe_cfg.get("normalize_scale", 100)
-        # We pass a binarised mask (values 0/1), so label=1 regardless of the
-        # original multi-class label value stored in self._label_value.
+        # We pass a binarised mask (values 0/1), so label=1.
         s["label"] = 1
 
         resampling = fe_cfg.get("resampling", {})
-        if resampling.get("enabled", True):
+        if resampling.get("enabled", False):
+            # ROI data is already resampled to 1mm³, so this is usually disabled.
             s["resampledPixelSpacing"] = resampling.get(
                 "target_spacing", [1.0, 1.0, 1.0]
             )
@@ -74,16 +73,21 @@ class RadiomicsExtractor:
     # Public API
     # ------------------------------------------------------------------
 
-    def extract(self, image_path, mask_path):
+    def extract(self, image_path, mask_path, label_value=2):
         """
-        Extract radiomics features for one patient.
+        Extract radiomics features for one patient from CT + mask pair.
+
+        NOTE: This method is for backward compatibility / flexible use.
+        For pre-extracted ROI files, use extract_from_roi() instead.
 
         Parameters
         ----------
         image_path : str | Path
             Path to the CT NIfTI file (.nii or .nii.gz).
         mask_path  : str | Path
-            Path to the segmentation mask NIfTI file.
+            Path to the segmentation mask NIfTI file (multi-class).
+        label_value : int
+            Integer label in mask that corresponds to tumor ROI (default: 2).
 
         Returns
         -------
@@ -99,12 +103,12 @@ class RadiomicsExtractor:
 
             # Binarise the multi-class mask: keep only the tumour label
             mask_arr   = sitk.GetArrayFromImage(mask)
-            binary_arr = (mask_arr == self._label_value).astype(np.uint8)
+            binary_arr = (mask_arr == label_value).astype(np.uint8)
 
             if binary_arr.sum() == 0:
                 logging.warning(
                     "No voxels with label=%d found in %s — patient skipped.",
-                    self._label_value, mask_path,
+                    label_value, mask_path,
                 )
                 return None
 
@@ -131,14 +135,21 @@ class RadiomicsExtractor:
 
     def extract_from_roi(self, roi_path):
         """
-        Extract radiomics features from a tumor ROI NIfTI file.
+        Extract radiomics features from a pre-extracted tumor ROI NIfTI file.
 
-        The ROI is already masked and cropped. No additional binarization needed.
+        The ROI is already masked, cropped, and padded to uniform size.
+        A binary mask is created on-the-fly from the ROI:
+          - Void/background voxels: -1024 HU (padding from organizer)
+          - Tumor voxels: > -1024 HU (any value in windowed CT range)
+          - Binary mask: `(roi > -1024).astype(uint8)` → 1 = tumor, 0 = background
 
         Parameters
         ----------
         roi_path : str | Path
-            Path to the ROI NIfTI file (.nii or .nii.gz).
+            Path to pre-extracted ROI NIfTI file (.nii or .nii.gz).
+            Expected: ROI in HU units with:
+              - Background/void voxels: -1024 HU (padding from organizer)
+              - Tumor voxels: windowed to [-160, 240] HU range
 
         Returns
         -------
@@ -146,25 +157,29 @@ class RadiomicsExtractor:
             Feature name → scalar value.  Only numeric features are included;
             NaN / Inf values are replaced with 0.0.
         None
-            Returned when extraction fails.
+            Returned when no foreground voxels detected or extraction fails.
         """
         try:
             roi = sitk.ReadImage(str(roi_path))
 
-            # Create binary mask (any non-background voxel is foreground)
-            # Background is clipped to -160 HU; foreground is > -160 HU
+            # Create binary mask on-the-fly from ROI
+            # Exclude void voxels (background = -1024 HU) and keep tumor voxels.
+            # Binary mask: 1 for tumor, 0 for background/void
             roi_arr = sitk.GetArrayFromImage(roi)
-            binary_arr = (roi_arr > -160).astype(np.uint8)
+            binary_arr = (roi_arr > -1024).astype(np.uint8)
 
             if binary_arr.sum() == 0:
                 logging.warning("No foreground voxels found in %s — patient skipped.", roi_path)
                 return None
 
+            # Create SimpleITK binary mask and preserve spatial metadata from ROI
             binary_mask = sitk.GetImageFromArray(binary_arr)
             binary_mask.CopyInformation(roi)
 
+            # Extract radiomics features using ROI as image and binary mask as segmentation
             result = self._extractor.execute(roi, binary_mask)
 
+            # Parse features: exclude diagnostics, handle NaN/Inf, keep numeric only
             features = {}
             for k, v in result.items():
                 if k.startswith("diagnostics_"):

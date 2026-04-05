@@ -203,7 +203,9 @@ def main():
         logging.error("Provide --model <path> or --models-dir <dir> (or set output.checkpoint_dir in --config).")
         sys.exit(1)
 
-    transforms = get_val_transforms()
+    training_cfg = cfg.get('training', {})
+    spatial_size = training_cfg.get('spatial_size', None)
+    transforms = get_val_transforms(spatial_size=spatial_size)
 
     # ---- Collect test scans ----
     scan_files = []
