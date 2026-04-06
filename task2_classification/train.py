@@ -66,7 +66,7 @@ def parse_args():
     parser.add_argument('--model_type', type=str,
                        choices=list(_ARCH_REGISTRY), help='Model architecture')
     parser.add_argument('--num_classes', type=int, help='Number of classes')
-    parser.add_argument('--pretrained', action='store_true', help='Use pretrained weights')
+    parser.add_argument('--class_names', type=str, nargs='+', help='Class names (e.g. BCLM CRLM HCC HH ICC)')
     parser.add_argument('--learning_rate', type=float, help='Learning rate')
     parser.add_argument('--weight_decay', type=float, help='Weight decay')
     
@@ -79,8 +79,8 @@ def parse_args():
     
     # Cross-validation
     parser.add_argument('--k_folds', type=int, help='Number of folds for k-fold CV (0=no CV)')
-    parser.add_argument('--train_val_split', type=float, 
-                       help='Train/val split ratio if no separate val_dir')
+    parser.add_argument('--val_fraction', type=float, 
+                       help='Fraction of training data reserved for validation (e.g., 0.2 = 20% val, 80% train)')
     
     # Output
     parser.add_argument('--output_dir', type=str, 
@@ -127,12 +127,15 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
             args.model_type = config['model']['model_type']
         if args.num_classes is None and 'num_classes' in config['model']:
             args.num_classes = config['model']['num_classes']
-        if args.learning_rate is None and 'learning_rate' in config['model']:
-            args.learning_rate = float(config['model']['learning_rate'])
-        if args.weight_decay is None and 'weight_decay' in config['model']:
-            args.weight_decay = float(config['model']['weight_decay'])
-        if not args.pretrained and 'pretrained' in config['model']:
-            args.pretrained = config['model']['pretrained']
+        if (not hasattr(args, 'class_names') or args.class_names is None) and 'class_names' in config['model']:
+            args.class_names = config['model']['class_names']
+    
+    # Optimizer parameters
+    if 'optimizer' in config:
+        if args.learning_rate is None and 'lr' in config['optimizer']:
+            args.learning_rate = float(config['optimizer']['lr'])
+        if args.weight_decay is None and 'weight_decay' in config['optimizer']:
+            args.weight_decay = float(config['optimizer']['weight_decay'])
     
     # Training parameters
     if 'training' in config:
@@ -159,8 +162,8 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
             args.val_dir = config['data']['val_dir']
         if args.val_labels_csv is None and 'val_labels_csv' in config['data']:
             args.val_labels_csv = config['data']['val_labels_csv']
-        if args.train_val_split is None and 'train_val_split' in config['data']:
-            args.train_val_split = config['data']['train_val_split']
+        if args.val_fraction is None and 'val_fraction' in config['data']:
+            args.val_fraction = config['data']['val_fraction']
     
     # Output
     if 'output' in config:
@@ -168,6 +171,8 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
             args.output_dir = config['output']['checkpoint_dir']
     if args.experiment_name is None and 'experiment_name' in config:
         args.experiment_name = config['experiment_name']
+    if not hasattr(args, 'group_number') or args.group_number is None:
+        args.group_number = config.get('group_number', 0)
     
     # Set defaults if still None
     if args.output_dir is None:
@@ -194,8 +199,10 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
         args.patience = 10
     if args.k_folds is None:
         args.k_folds = 0
-    if args.train_val_split is None:
-        args.train_val_split = 0.8
+    if args.val_fraction is None:
+        args.val_fraction = 0.2
+    if not hasattr(args, 'class_names') or args.class_names is None:
+        args.class_names = ['class_0', 'class_1', 'class_2', 'class_3', 'class_4']
     
     return args
 
@@ -312,6 +319,10 @@ def run_cv_training(args, full_dataset, device):
         # Fresh model for every fold
         model = create_model(args)
 
+        # Extract optimizer and loss configs
+        optimizer_config = args._config.get('optimizer', {})
+        loss_config = args._config.get('loss', {})
+
         # fold_output_dir already set above (and used for fold_complete_path check)
         trainer = Trainer(
             model=model,
@@ -324,6 +335,8 @@ def run_cv_training(args, full_dataset, device):
             max_epochs=args.max_epochs,
             val_interval=args.val_interval,
             patience=args.patience,
+            optimizer_config=optimizer_config,
+            loss_config=loss_config,
         )
 
         trainer.train()
@@ -465,8 +478,64 @@ def main():
     logging.info("Task 2: Liver Tumors Classification Training")
     logging.info("="*60)
     logging.info(f"Configuration:")
-    for key, value in vars(args).items():
-        logging.info(f"  {key}: {value}")
+    
+    # Basic file and path arguments
+    logging.info(f"  experiment_name: {args.experiment_name}")
+    logging.info(f"  data_dir: {args.data_dir}")
+    logging.info(f"  val_dir: {args.val_dir}")
+    logging.info(f"  labels_csv: {args.labels_csv}")
+    logging.info(f"  val_labels_csv: {args.val_labels_csv}")
+    
+    # Model configuration
+    logging.info(f"  model_type: {args.model_type}")
+    logging.info(f"  num_classes: {args.num_classes}")
+    logging.info(f"  class_names: {args.class_names}")
+    
+    # Model architecture parameters
+    model_cfg = args._config.get('model', {})
+    if args.model_type in model_cfg:
+        arch_params = model_cfg[args.model_type]
+        for key, val in arch_params.items():
+            logging.info(f"  {args.model_type}_{key}: {val}")
+    
+    # Optimizer & scheduler
+    optimizer_cfg = args._config.get('optimizer', {})
+    logging.info(f"  optimizer_type: {optimizer_cfg.get('type', 'adam')}")
+    logging.info(f"  learning_rate: {args.learning_rate}")
+    logging.info(f"  weight_decay: {args.weight_decay}")
+    if 'betas' in optimizer_cfg:
+        logging.info(f"  optimizer_betas: {optimizer_cfg['betas']}")
+    if 'momentum' in optimizer_cfg:
+        logging.info(f"  optimizer_momentum: {optimizer_cfg['momentum']}")
+    
+    # Loss
+    loss_cfg = args._config.get('loss', {})
+    logging.info(f"  loss_type: {loss_cfg.get('type', 'cross_entropy')}")
+    if loss_cfg.get('class_weights'):
+        logging.info(f"  loss_class_weights: {loss_cfg['class_weights']}")
+    
+    # Training
+    logging.info(f"  max_epochs: {args.max_epochs}")
+    logging.info(f"  batch_size: {args.batch_size}")
+    logging.info(f"  num_workers: {args.num_workers}")
+    logging.info(f"  validation_interval: {args.val_interval}")
+    logging.info(f"  patience: {args.patience}")
+    logging.info(f"  k_folds: {args.k_folds}")
+    logging.info(f"  val_fraction: {args.val_fraction}")
+    
+    # Data augmentation
+    train_cfg = args._config.get('training', {})
+    logging.info(f"  spatial_size: {train_cfg.get('spatial_size', [96, 96, 96])}")
+    logging.info(f"  enable_augmentation: {train_cfg.get('enable_augmentation', True)}")
+    
+    data_cfg = args._config.get('data', {})
+    logging.info(f"  enable_stratified_split: {data_cfg.get('enable_stratified_split', True)}")
+    
+    # Output & reproducibility
+    logging.info(f"  output_dir: {args.output_dir}")
+    logging.info(f"  seed: {args.seed}")
+    logging.info(f"  group_number: {args.group_number}")
+    
     logging.info("="*60)
     
     # Validate required arguments
@@ -512,11 +581,12 @@ def main():
         val_dataset   = load_data(args.val_dir, args.val_labels_csv, transforms=val_transforms)
     else:
         # Stratified split
-        logging.info(f"Splitting training data with ratio {args.train_val_split}")
+        train_ratio = 1 - args.val_fraction  # Convert val_fraction to train_ratio
+        logging.info(f"Splitting training data with val_fraction={args.val_fraction} (train_ratio={train_ratio})")
         enable_stratified_split = args._config.get("data", {}).get("enable_stratified_split", True)
         train_subset, val_subset = split_dataset(
             full_dataset,
-            train_ratio=args.train_val_split,
+            train_ratio=train_ratio,
             random_seed=args.seed,
             enable_stratified_split=enable_stratified_split,
         )
@@ -546,6 +616,9 @@ def main():
     
     # Set up trainer
     logging.info("Setting up trainer...")
+    optimizer_config = args._config.get('optimizer', {})
+    loss_config = args._config.get('loss', {})
+    
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -556,7 +629,9 @@ def main():
         weight_decay=args.weight_decay,
         max_epochs=args.max_epochs,
         val_interval=args.val_interval,
-        patience=args.patience
+        patience=args.patience,
+        optimizer_config=optimizer_config,
+        loss_config=loss_config,
     )
     
     # Load checkpoint if specified (for resuming training)

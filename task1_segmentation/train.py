@@ -118,16 +118,8 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
     if 'model' in config:
         if args.num_classes is None and 'num_classes' in config['model']:
             args.num_classes = config['model']['num_classes']
-        if args.learning_rate is None and 'learning_rate' in config['model']:
-            args.learning_rate = float(config['model']['learning_rate'])
-        if args.weight_decay is None and 'weight_decay' in config['model']:
-            args.weight_decay = float(config['model']['weight_decay'])
-        if args.class_names is None and 'class_names' in config['model']:
-            args.class_names = config['model']['class_names']
-        if args.compute_hd95 is None and 'compute_hd95' in config['model']:
-            args.compute_hd95 = config['model']['compute_hd95']
     
-    # Training parameters
+    # Training parameters (including metrics configuration)
     if 'training' in config:
         if args.max_epochs is None and 'epochs' in config['training']:
             args.max_epochs = config['training']['epochs']
@@ -139,10 +131,22 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
             args.val_interval = config['training']['validation_interval']
         if args.patience is None and 'patience' in config['training']:
             args.patience = config['training']['patience']
+        if args.class_names is None and 'class_names' in config['training']:
+            args.class_names = config['training']['class_names']
+        if args.compute_hd95 is None and 'compute_hd95' in config['training']:
+            args.compute_hd95 = config['training']['compute_hd95']
     
-
+    # Model parameters
+    if 'model' in config:
+        if args.num_classes is None and 'num_classes' in config['model']:
+            args.num_classes = config['model']['num_classes']
     
-    # Data paths
+    # Optimizer parameters (learning_rate and weight_decay now read from optimizer section)
+    if 'optimizer' in config:
+        if args.learning_rate is None and 'lr' in config['optimizer']:
+            args.learning_rate = float(config['optimizer']['lr'])
+        if args.weight_decay is None and 'weight_decay' in config['optimizer']:
+            args.weight_decay = float(config['optimizer']['weight_decay'])
     if 'data' in config:
         if args.train_images is None and 'train_images' in config['data']:
             args.train_images = config['data']['train_images']
@@ -159,16 +163,6 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
     if 'output' in config:
         if args.output_dir is None and 'checkpoint_dir' in config['output']:
             args.output_dir = config['output']['checkpoint_dir']
-
-    # Derive output_dir from experiment_name when not explicitly given
-    if args.output_dir is None:
-        experiment_name = config.get('experiment_name', '')
-        if experiment_name:
-            args.output_dir = os.path.join('./model_checkpoints', experiment_name)
-    
-    # Ensure parent model_checkpoints directory exists if using default path
-    if args.output_dir and args.output_dir.startswith('./model_checkpoints'):
-        os.makedirs('./model_checkpoints', exist_ok=True)
     
     # Seed
     if args.seed is None:
@@ -192,10 +186,14 @@ def merge_config_with_args(config: dict, args: argparse.Namespace) -> argparse.N
     if args.patience is None:
         args.patience = 20
     if args.output_dir is None:
-        args.output_dir = './checkpoints'
-        os.makedirs('./checkpoints', exist_ok=True)
+        args.output_dir = './model_checkpoints'
     if args.compute_hd95 is None:
         args.compute_hd95 = True
+    
+    # Append experiment_name to output_dir
+    experiment_name = config.get('experiment_name', '')
+    if experiment_name:
+        args.output_dir = os.path.join(args.output_dir, experiment_name)
     
     return args
 
@@ -269,8 +267,69 @@ def main():
     logging.info("Task 1: Liver Tumor Segmentation Training")
     logging.info("="*60)
     logging.info(f"Configuration:")
-    for key, value in vars(args).items():
-        logging.info(f"  {key}: {value}")
+    
+    # CLI and file arguments
+    logging.info(f"  config: {args.config}")
+    logging.info(f"  train_images: {args.train_images}")
+    logging.info(f"  train_labels: {args.train_labels}")
+    logging.info(f"  val_images: {args.val_images}")
+    logging.info(f"  val_labels: {args.val_labels}")
+    logging.info(f"  val_fraction: {args.val_fraction}")
+    
+    # Model & classes
+    logging.info(f"  num_classes: {args.num_classes}")
+    logging.info(f"  class_names: {args.class_names}")
+    
+    # Optimizer & scheduler (from config)
+    optimizer_cfg = config.get('optimizer', {})
+    scheduler_cfg = config.get('scheduler', {})
+    logging.info(f"  learning_rate: {args.learning_rate}")
+    logging.info(f"  weight_decay: {args.weight_decay}")
+    logging.info(f"  optimizer_type: {optimizer_cfg.get('type', 'adam')}")
+    if 'betas' in optimizer_cfg:
+        logging.info(f"  optimizer_betas: {optimizer_cfg['betas']}")
+    if 'momentum' in optimizer_cfg:
+        logging.info(f"  optimizer_momentum: {optimizer_cfg['momentum']}")
+    logging.info(f"  scheduler_type: {scheduler_cfg.get('type', 'cosine')}")
+    if scheduler_cfg.get('type') == 'cosine':
+        logging.info(f"  scheduler_T_max: {scheduler_cfg.get('T_max', args.max_epochs)}")
+        logging.info(f"  scheduler_eta_min: {scheduler_cfg.get('eta_min', 1e-6)}")
+    
+    # Architecture
+    arch_cfg = config.get('architecture', {})
+    arch_type = arch_cfg.get('type', 'unet')
+    logging.info(f"  architecture: {arch_type}")
+    if arch_type in arch_cfg:
+        arch_params = arch_cfg[arch_type]
+        for key, val in arch_params.items():
+            logging.info(f"    {arch_type}_{key}: {val}")
+    
+    # Training
+    logging.info(f"  max_epochs: {args.max_epochs}")
+    logging.info(f"  batch_size: {args.batch_size}")
+    logging.info(f"  num_workers: {args.num_workers}")
+    logging.info(f"  val_interval: {args.val_interval}")
+    logging.info(f"  patience: {args.patience}")
+    
+    # Data augmentation & caching
+    data_cfg = config.get('data', {})
+    logging.info(f"  enable_augmentation: {data_cfg.get('enable_augmentation', False)}")
+    logging.info(f"  cache_rate: {data_cfg.get('cache_rate', 0.5)}")
+    
+    # Metrics & hardware
+    logging.info(f"  compute_hd95: {args.compute_hd95}")
+    logging.info(f"  amp_enabled: {config.get('amp', False)}")
+    
+    # Output & reproducibility
+    logging.info(f"  output_dir: {args.output_dir}")
+    logging.info(f"  seed: {args.seed}")
+    logging.info(f"  resume_from: {args.resume_from}")
+    
+    if 'experiment_name' in config:
+        logging.info(f"  experiment_name: {config['experiment_name']}")
+    if 'group_number' in config:
+        logging.info(f"  group_number: {config['group_number']}")
+    
     logging.info("="*60)
     
     # Validate required arguments
@@ -310,7 +369,11 @@ def main():
         raise ValueError("No validation data found!")
     
     # Get data transforms
-    train_transforms, val_transforms = get_data_transforms()
+    enable_augmentation = config.get('data', {}).get('enable_augmentation', False)
+    train_transforms, val_transforms = get_data_transforms(enable_augmentation=enable_augmentation)
+    
+    # Extract cache_rate for data loading
+    cache_rate = config.get('data', {}).get('cache_rate', 0.5)
     
     # Create data loaders
     logging.info("Creating data loaders...")
@@ -320,7 +383,8 @@ def main():
         train_transforms,
         val_transforms,
         batch_size=args.batch_size,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        cache_rate=cache_rate
     )
     
     # Initialize model
@@ -345,6 +409,9 @@ def main():
         logging.warning("CUDA not available! Training on CPU will be very slow.")
         logging.info(f"Using device: {device}")
     
+    # Extract AMP setting from config
+    amp_enabled = config.get('amp', False)
+    
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -353,7 +420,9 @@ def main():
         output_dir=args.output_dir,
         max_epochs=args.max_epochs,
         val_interval=args.val_interval,
-        patience=args.patience
+        patience=args.patience,
+        amp=amp_enabled,
+        compute_hd95=args.compute_hd95
     )
     
     # Load checkpoint if specified (for resuming training)
@@ -388,8 +457,10 @@ def main():
     metric_groups = {
         "Loss": ["train_loss", "val_loss"],
         "Dice Scores": [m for m in trainer.metric_tracker.metrics if "dice" in m.lower()],
-        "HD95 Scores": [m for m in trainer.metric_tracker.metrics if "hd95" in m.lower()]
     }
+    # Only include HD95 if enabled
+    if args.compute_hd95:
+        metric_groups["HD95 Scores"] = [m for m in trainer.metric_tracker.metrics if "hd95" in m.lower()]
     
     try:
         trainer.metric_tracker.plot_metrics(metric_groups)

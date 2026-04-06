@@ -1,11 +1,12 @@
 import os
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.amp import autocast, GradScaler
 from typing import Dict, Optional, Any, Callable
 from tqdm import tqdm
 from .metric_tracker import MetricTracker
 import logging
-import torch.nn as nn
 
 
 class Trainer:
@@ -18,7 +19,9 @@ class Trainer:
         output_dir: str = "output",
         max_epochs: int = 100,
         val_interval: int = 1,
-        patience: int = 10
+        patience: int = 10,
+        amp: bool = False,
+        compute_hd95: bool = True
     ):
         """
         A trainer class to handle the training and validation loops.
@@ -32,6 +35,8 @@ class Trainer:
             max_epochs: Maximum number of epochs to train
             val_interval: How often to run validation (in epochs)
             patience: Number of epochs to wait for improvement before early stopping
+            amp: Enable Automatic Mixed Precision training (faster, less memory)
+            compute_hd95: Whether to compute and plot HD95 metrics
         """
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -41,11 +46,16 @@ class Trainer:
         self.max_epochs = max_epochs
         self.val_interval = val_interval
         self.patience = patience
+        self.amp = amp and torch.cuda.is_available()  # AMP only works on CUDA
+        self.compute_hd95 = compute_hd95
         
         os.makedirs(output_dir, exist_ok=True)
         
         # Get optimizer and scheduler
         self.optimizer, self.scheduler = model.configure_optimizers()
+        
+        # Initialize AMP GradScaler if enabled
+        self.scaler = GradScaler('cuda') if self.amp else None
         
         # Initialize tracking variables
         self.current_epoch = 0
@@ -66,6 +76,8 @@ class Trainer:
             format='%(asctime)s [%(levelname)s] %(message)s'
         )
         self.logger = logging.getLogger(__name__)
+        if self.amp:
+            self.logger.info("Automatic Mixed Precision (AMP) training enabled")
         
     def train_epoch(self) -> Dict[str, float]:
         """Run one epoch of training."""
@@ -79,11 +91,19 @@ class Trainer:
                 batch = {k: v.to(self.device) if torch.is_tensor(v) else v 
                         for k, v in batch.items()}
                 
-                # Training step
+                # Training step with optional AMP
                 self.optimizer.zero_grad()
-                loss, metrics = self.model.training_step(batch)
-                loss.backward()
-                self.optimizer.step()
+                
+                if self.amp:
+                    with autocast(device_type='cuda'):
+                        loss, metrics = self.model.training_step(batch)
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss, metrics = self.model.training_step(batch)
+                    loss.backward()
+                    self.optimizer.step()
                 
                 # Update metrics
                 batch_size = batch['image'].size(0)
@@ -253,7 +273,7 @@ class Trainer:
             
             # Update plots if validation ran
             if (epoch + 1) % self.val_interval == 0:
-                self.metric_tracker.update_plots()
+                self.metric_tracker.update_plots(compute_hd95=self.compute_hd95)
             
             # Print epoch summary
             self.logger.info(

@@ -36,18 +36,24 @@ class SegmentationModelBase(nn.Module):
         weight_decay: float = 1e-5,
         class_names: Optional[List[str]] = None,
         arch_config: Optional[dict] = None,
+        optimizer_config: Optional[dict] = None,
+        scheduler_config: Optional[dict] = None,
         compute_hd95: bool = True,
     ):
         """
         Args:
             num_classes:    Total output channels including background.
-            learning_rate:  Adam optimiser learning rate.
-            weight_decay:   Adam optimiser weight decay (L2 regularisation).
+            learning_rate:  Optimiser learning rate.
+            weight_decay:   Optimiser weight decay (L2 regularisation).
             class_names:    Foreground class names for metric logging.
                             Length must equal num_classes - 1.
             arch_config:    Architecture-specific sub-dict from the YAML
                             (e.g. config['architecture']['unet']).
                             May contain 'roi_size' and 'sw_batch_size'.
+            optimizer_config: Optimizer configuration dict with keys:
+                            'type' (adam|sgd|adamw), 'weight_decay', 'momentum', 'betas'
+            scheduler_config: Scheduler configuration dict with keys:
+                            'type' (cosine|step|reduce_on_plateau|none), 'T_max', 'eta_min', etc.
             compute_hd95:   Whether to compute HD95 metric during validation.
                             Set to False for faster training iterations.
         """
@@ -55,6 +61,8 @@ class SegmentationModelBase(nn.Module):
         self.num_classes = num_classes
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
+        self.optimizer_config = optimizer_config or {}
+        self.scheduler_config = scheduler_config or {}
         self.compute_hd95 = compute_hd95
         arch_config = arch_config or {}
 
@@ -136,12 +144,73 @@ class SegmentationModelBase(nn.Module):
         return metrics_dict
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(
-            self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
-        )
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5
-        )
+        """Configure optimizer and scheduler based on config settings."""
+        # Optimizer configuration (convert YAML string values to float)
+        opt_type = self.optimizer_config.get('type', 'adam').lower()
+        lr = float(self.optimizer_config.get('lr', self.learning_rate))
+        weight_decay = float(self.optimizer_config.get('weight_decay', self.weight_decay))
+        eps = float(self.optimizer_config.get('eps', 1e-8))
+        
+        if opt_type == 'sgd':
+            momentum = float(self.optimizer_config.get('momentum', 0.9))
+            optimizer = torch.optim.SGD(
+                self.parameters(),
+                lr=lr,
+                momentum=momentum,
+                weight_decay=weight_decay
+            )
+        elif opt_type == 'adamw':
+            betas_list = self.optimizer_config.get('betas', [0.9, 0.999])
+            betas = tuple(float(b) for b in betas_list)
+            optimizer = torch.optim.AdamW(
+                self.parameters(),
+                lr=lr,
+                betas=betas,
+                weight_decay=weight_decay,
+                eps=eps
+            )
+        else:  # Default to Adam
+            betas_list = self.optimizer_config.get('betas', [0.9, 0.999])
+            betas = tuple(float(b) for b in betas_list)
+            optimizer = torch.optim.Adam(
+                self.parameters(),
+                lr=lr,
+                betas=betas,
+                weight_decay=weight_decay,
+                eps=eps
+            )
+        
+        # Scheduler configuration (convert YAML string values to float/int)
+        scheduler_type = self.scheduler_config.get('type', 'reduce_on_plateau').lower()
+        scheduler = None
+        
+        if scheduler_type == 'cosine':
+            T_max = int(self.scheduler_config.get('T_max', 100))
+            eta_min = float(self.scheduler_config.get('eta_min', 1e-6))
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=T_max,
+                eta_min=eta_min
+            )
+        elif scheduler_type == 'step':
+            step_size = int(self.scheduler_config.get('step_size', 30))
+            gamma = float(self.scheduler_config.get('gamma', 0.1))
+            scheduler = torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=step_size,
+                gamma=gamma
+            )
+        elif scheduler_type == 'reduce_on_plateau':
+            patience = int(self.scheduler_config.get('patience', 5))
+            factor = float(self.scheduler_config.get('factor', 0.5))
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min",
+                factor=factor,
+                patience=patience
+            )
+        # elif scheduler_type == 'none': scheduler remains None
+        
         return optimizer, scheduler
 
     def get_progress_bar_dict(self) -> Dict[str, Any]:
@@ -177,7 +246,7 @@ def build_model(
     Instantiate the segmentation model specified by config['architecture']['type'].
 
     Args:
-        config:        Full YAML config dict containing an 'architecture' key.
+        config:        Full YAML config dict containing 'architecture', 'optimizer', and 'scheduler' keys.
         num_classes:   Number of output channels including background.
         learning_rate: Optimiser learning rate.
         weight_decay:  Optimiser weight decay (L2 regularisation).
@@ -193,9 +262,13 @@ def build_model(
     arch_type = arch_cfg.get('type', 'unet').lower()
     arch_params = arch_cfg.get(arch_type, {})
     
-    # Extract compute_hd95 flag from model config (default True for backward compatibility)
-    model_cfg = config.get('model', {})
-    compute_hd95 = model_cfg.get('compute_hd95', True)
+    # Extract compute_hd95 flag from training config (default True for backward compatibility)
+    training_cfg = config.get('training', {})
+    compute_hd95 = training_cfg.get('compute_hd95', True)
+    
+    # Extract optimizer and scheduler configs
+    optimizer_cfg = config.get('optimizer', {})
+    scheduler_cfg = config.get('scheduler', {})
 
     if arch_type not in _ARCH_REGISTRY:
         raise ValueError(
@@ -217,5 +290,7 @@ def build_model(
         weight_decay=weight_decay,
         class_names=class_names,
         arch_config=arch_params,
+        optimizer_config=optimizer_cfg,
+        scheduler_config=scheduler_cfg,
         compute_hd95=compute_hd95,
     )

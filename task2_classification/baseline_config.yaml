@@ -2,12 +2,12 @@
 # Baseline configuration using MONAI ResNet-18 architecture.
 # Switch architectures by changing model_type (resnet18 | resnet50 | densenet121).
 
-experiment_name: "baseline_resnet50"
+experiment_name: "baseline_resnet18"
 group_number: 0  # Your group number — used to name the output CSV (e.g. group0_task2_results.csv)
 
 # Model architecture
 model:
-  model_type: "resnet50"  # Options: resnet18 | resnet50 | densenet121
+  model_type: "resnet18"  # Options: resnet18 | resnet50 | densenet121
   num_classes: 5
   # Class names in label-index order (assigned alphabetically by NIfTIDataset):
   #   0: BCLM  (Breast Cancer Liver Metastasis)
@@ -21,9 +21,6 @@ model:
     - HCC
     - HH
     - ICC
-  pretrained: true  # Set to true if using ImageNet pretrained weights
-  learning_rate: 1e-3
-  weight_decay: 1e-5
 
   # Architecture-specific parameters — only the block matching model_type is used.
   resnet18:
@@ -41,11 +38,11 @@ model:
 
 # Training parameters
 training:
-  epochs: 600
-  batch_size: 16
-  num_workers: 2
+  epochs: 10
+  batch_size: 2
+  num_workers: 1
   validation_interval: 1
-  patience: 50
+  patience: 1
   # Cross-validation: set k_folds > 1 to enable stratified k-fold CV.
   # When enabled, train_val_split is ignored; each fold uses (k-1)/k data
   # for training and 1/k for validation. A fresh model is trained per fold.
@@ -53,31 +50,36 @@ training:
   
   # Spatial size for resizing ROIs (z, y, x) order (default: 64x64x64 for GPU memory).
   # Pre-extracted ROI size is (74, 354, 432). Reduce for faster training, increase for better metrics.
-  spatial_size: [96, 96, 96]
+  spatial_size: [64, 64, 64]
   
   # Enable data augmentation during training (rotation, flip, noise, contrast).
-  enable_augmentation: true
+  enable_augmentation: false
 
 # Data paths
 data:
-  train_dir: "./../../dataset/task2_data/roi_data"
-  labels_csv: "./../../dataset/task2_data/labels.csv"
+  train_dir: "/path/to/roi_data"
+  labels_csv: "/path/to/labels.csv"
   val_dir: null
-  train_val_split: 0.8
-  enable_stratified_split: true  # Use stratified splitting to ensure balanced class distribution in train/val
+  val_labels_csv: null  # CSV file for validation data (required if val_dir is specified)
+  val_fraction: 0.1  # Fraction of training data reserved for validation
+  enable_stratified_split: false  # Use stratified splitting to ensure balanced class distribution in train/val
 
 # Optimizer
 optimizer:
-  type: "adam"
-  lr: 1e-4
-  weight_decay: 1e-4
+  type: "adam"              # Options: adam | sgd | adamw
+  lr: 1e-1                  # Learning rate (overrides model.learning_rate if set)
+  weight_decay: 1e-1        # Weight decay (overrides model.weight_decay if set)
+  # SGD-specific parameters (ignored for adam/adamw)
+  momentum: 0.9
+  # Adam/AdamW-specific parameters
+  betas: [0.9, 0.999]       # (beta1, beta2) for momentum and RMSprop
+  eps: 1e-8                 # Numerical stability constant
 
 # Loss
 loss:
-  type: "cross_entropy"
-  class_weights: null
+  type: "cross_entropy"     # Options: cross_entropy | focal_loss
+  class_weights: null       # Per-class weights [w0, w1, w2, ...] or null for uniform
 
 # Output
 output:
   checkpoint_dir: "./model_checkpoints"
-  save_best_only: true

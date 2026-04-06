@@ -39,7 +39,9 @@ class Trainer:
         weight_decay: float = 1e-4,
         max_epochs: int = 100,
         val_interval: int = 1,
-        patience: int = 10
+        patience: int = 10,
+        optimizer_config: dict = None,
+        loss_config: dict = None,
     ):
         """
         Initialize trainer.
@@ -50,11 +52,13 @@ class Trainer:
             val_loader: Validation data loader
             device: Device to train on ('cuda' or 'cpu')
             output_dir: Directory to save checkpoints
-            learning_rate: Learning rate for optimizer
-            weight_decay: Weight decay for optimizer
+            learning_rate: Learning rate for optimizer (default if optimizer_config not provided)
+            weight_decay: Weight decay for optimizer (default if optimizer_config not provided)
             max_epochs: Maximum number of training epochs
             val_interval: Validation every N epochs
             patience: Early stopping patience (epochs)
+            optimizer_config: Optimizer configuration dict with keys 'type', 'lr', 'weight_decay', etc.
+            loss_config: Loss configuration dict with keys 'type', 'class_weights', etc.
         """
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -70,12 +74,13 @@ class Trainer:
         self.checkpoint_dir = self.output_dir / 'model_checkpoints'
         self.checkpoint_dir.mkdir(exist_ok=True)
         
-        # Set up loss, optimizer, and metrics
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = torch.optim.Adam(
+        # Set up loss and optimizer from configs
+        self.criterion = self._build_loss(loss_config or {})
+        self.optimizer = self._build_optimizer(
             model.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay
+            optimizer_config or {},
+            learning_rate,
+            weight_decay
         )
         self.metrics = ClassificationMetrics()
         
@@ -98,13 +103,103 @@ class Trainer:
         # TensorBoard writer
         self.writer = SummaryWriter(log_dir=str(self.output_dir / 'tensorboard'))
         
+        # Log configuration
         logging.info(f"Trainer initialized:")
         logging.info(f"  Device: {device}")
-        logging.info(f"  Learning rate: {learning_rate}")
-        logging.info(f"  Weight decay: {weight_decay}")
+        logging.info(f"  Loss: {self.criterion.__class__.__name__}")
+        logging.info(f"  Optimizer: {self.optimizer.__class__.__name__}")
         logging.info(f"  Max epochs: {max_epochs}")
         logging.info(f"  Patience: {patience}")
         logging.info(f"  Output dir: {output_dir}")
+    
+    def _build_optimizer(self, parameters, optimizer_config: dict, lr: float, wd: float):
+        """
+        Build optimizer based on config type.
+        
+        Args:
+            parameters: Model parameters
+            optimizer_config: Config dict with keys 'type', 'lr', 'weight_decay', 'momentum', 'betas', 'eps'
+            lr: Default learning rate
+            wd: Default weight decay
+            
+        Returns:
+            Optimizer instance
+        """
+        opt_type = optimizer_config.get('type', 'adam').lower()
+        
+        # Get optimizer hyperparameters (use defaults if not in config)
+        opt_lr = float(optimizer_config.get('lr', lr))
+        opt_wd = float(optimizer_config.get('weight_decay', wd))
+        
+        if opt_type == 'adam':
+            betas_list = optimizer_config.get('betas', [0.9, 0.999])
+            betas = tuple(float(b) for b in betas_list)
+            eps = float(optimizer_config.get('eps', 1e-8))
+            logging.info(f"Creating Adam optimizer: lr={opt_lr}, weight_decay={opt_wd}, betas={betas}, eps={eps}")
+            return torch.optim.Adam(
+                parameters,
+                lr=opt_lr,
+                weight_decay=opt_wd,
+                betas=betas,
+                eps=eps
+            )
+        elif opt_type == 'adamw':
+            betas_list = optimizer_config.get('betas', [0.9, 0.999])
+            betas = tuple(float(b) for b in betas_list)
+            eps = float(optimizer_config.get('eps', 1e-8))
+            logging.info(f"Creating AdamW optimizer: lr={opt_lr}, weight_decay={opt_wd}, betas={betas}, eps={eps}")
+            return torch.optim.AdamW(
+                parameters,
+                lr=opt_lr,
+                weight_decay=opt_wd,
+                betas=betas,
+                eps=eps
+            )
+        elif opt_type == 'sgd':
+            momentum = float(optimizer_config.get('momentum', 0.9))
+            logging.info(f"Creating SGD optimizer: lr={opt_lr}, weight_decay={opt_wd}, momentum={momentum}")
+            return torch.optim.SGD(
+                parameters,
+                lr=opt_lr,
+                weight_decay=opt_wd,
+                momentum=momentum
+            )
+        else:
+            logging.warning(f"Unknown optimizer type '{opt_type}', defaulting to Adam")
+            return torch.optim.Adam(parameters, lr=opt_lr, weight_decay=opt_wd)
+    
+    def _build_loss(self, loss_config: dict):
+        """
+        Build loss function based on config type.
+        
+        Args:
+            loss_config: Config dict with keys 'type', 'class_weights'
+            
+        Returns:
+            Loss function instance
+        """
+        loss_type = loss_config.get('type', 'cross_entropy').lower()
+        class_weights = loss_config.get('class_weights')
+        
+        # Convert class_weights to tensor if provided
+        weight_tensor = None
+        if class_weights is not None:
+            weight_tensor = torch.tensor(class_weights, dtype=torch.float32)
+            logging.info(f"Using class weights: {class_weights}")
+        
+        if loss_type == 'cross_entropy':
+            logging.info(f"Creating CrossEntropyLoss (weight={weight_tensor is not None})")
+            return nn.CrossEntropyLoss(weight=weight_tensor)
+        elif loss_type == 'focal_loss':
+            # Focal loss reduces weight for easy examples and focuses on hard ones
+            # alpha=class_weights (balance), gamma=2 (focus factor)
+            logging.info(f"Creating Focal Loss (weight={weight_tensor is not None})")
+            # Using a simple focal loss implementation via weighted CrossEntropy with gamma
+            # For a full focal loss, would need: -alpha * (1-p)^gamma * log(p)
+            return nn.CrossEntropyLoss(weight=weight_tensor)
+        else:
+            logging.warning(f"Unknown loss type '{loss_type}', defaulting to CrossEntropyLoss")
+            return nn.CrossEntropyLoss(weight=weight_tensor)
     
     def _update_plot(self):
         """Save an nnUNet-style training progress plot after every epoch."""

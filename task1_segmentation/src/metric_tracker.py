@@ -112,11 +112,14 @@ class MetricTracker:
             plt.savefig(plot_path)
             plt.close()
 
-    def update_plots(self):
+    def update_plots(self, compute_hd95: bool = True):
         """
         Re-render training plots and overwrite fixed-name files so they stay
         current after every validation step.  Groups are inferred automatically
         from which metric names are currently being tracked.
+        
+        Args:
+            compute_hd95: Whether to include HD95 metrics in plots
         """
         if not self.metrics:
             return
@@ -125,8 +128,10 @@ class MetricTracker:
         metric_groups = {
             "Loss":        [m for m in self.metrics if "loss" in m.lower()],
             "Dice Scores": [m for m in self.metrics if "dice" in m.lower()],
-            "HD95 Scores": [m for m in self.metrics if "hd95" in m.lower()],
         }
+        # Only include HD95 if enabled
+        if compute_hd95:
+            metric_groups["HD95 Scores"] = [m for m in self.metrics if "hd95" in m.lower()]
         # Drop empty groups
         metric_groups = {k: v for k, v in metric_groups.items() if v}
         # Anything that didn't fit into the groups above

@@ -8,7 +8,7 @@ import logging
 from typing import List, Dict, Tuple, Optional
 
 from sklearn.model_selection import train_test_split
-from monai.data import Dataset, DataLoader
+from monai.data import Dataset, CacheDataset, DataLoader
 
 
 def filter_images_with_labels(images: List[str], labels: List[str]) -> Tuple[List[str], List[str]]:
@@ -118,13 +118,12 @@ def load_data_random(
     return train_files, val_files
 
 
-
-
 def get_data_loaders(train_files: List[Dict], val_files: List[Dict], 
                      train_transforms, val_transforms,
-                     batch_size: int = 2, num_workers: int = 4) -> Tuple[DataLoader, DataLoader]:
+                     batch_size: int = 2, num_workers: int = 4,
+                     cache_rate: float = 0.5) -> Tuple[DataLoader, DataLoader]:
     """
-    Create MONAI data loaders from file lists.
+    Create MONAI data loaders from file lists with optional caching.
     
     Args:
         train_files: List of training file dictionaries
@@ -133,13 +132,22 @@ def get_data_loaders(train_files: List[Dict], val_files: List[Dict],
         val_transforms: Validation data transforms
         batch_size: Batch size for training
         num_workers: Number of worker processes
+        cache_rate: Fraction of data to cache in memory (0-1)
         
     Returns:
         Tuple of (train_loader, val_loader)
     """
-    # Create datasets
-    train_ds = Dataset(data=train_files, transform=train_transforms)
-    val_ds = Dataset(data=val_files, transform=val_transforms)
+    # Create datasets with optional caching
+    cache_rate = max(0.0, min(1.0, cache_rate))  # Clamp to [0, 1]
+    
+    if cache_rate > 0:
+        train_ds = CacheDataset(data=train_files, transform=train_transforms, cache_rate=cache_rate)
+        val_ds = CacheDataset(data=val_files, transform=val_transforms, cache_rate=cache_rate)
+        logging.info(f"CacheDataset enabled: cache_rate={cache_rate}")
+    else:
+        train_ds = Dataset(data=train_files, transform=train_transforms)
+        val_ds = Dataset(data=val_files, transform=val_transforms)
+        logging.info("Using standard Dataset (no caching)")
     
     # Determine if persistent workers should be used
     persistent = num_workers > 0

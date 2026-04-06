@@ -175,6 +175,8 @@ python train.py \
     --output_dir ./model_checkpoints
 ```
 
+**Note on Configuration Precedence:** CLI arguments always override YAML config values. For example, `python train.py --config baseline_config.yaml --learning_rate 5e-4` will use 5e-4 from CLI, ignoring the config file's value.
+
 #### Key Arguments
 
 | Argument | Description |
@@ -194,9 +196,12 @@ python train.py \
 | `--patience` | Early stopping patience |
 | `--output_dir` | Directory to save checkpoints and logs |
 | `--num_classes` | Number of classes (Background, Liver, Tumour) |
+| `--class_names` | Class names (foreground only) |
 | `--seed` | Random seed for reproducibility |
-| `--compute_hd95` | Compute HD95 metric during validation |
+| `--compute_hd95` | Compute HD95 metric during validation (default: true) |
 | `--resume_from` | Path to checkpoint to resume training from |
+
+**Configuration Philosophy:** Simple, top-level parameters are exposed as CLI args for quick experimentation. Advanced parameters (optimizer type, scheduler configuration, architecture-specific tuning) are configured in YAML only to avoid CLI clutter.
 
 #### Evaluate on Test Data
 ```bash
@@ -212,12 +217,14 @@ python evaluate.py \
 | Argument | Description |
 |---|---|
 | `--checkpoint` | Path to saved model checkpoint |
+| `--config` | Path to config YAML file (optional) |
 | `--test_images` | Path to test CT images |
 | `--test_labels` | Path to test segmentation masks (optional, for metrics only) |
+| `--num_classes` | Number of segmentation classes |
+| `--class_names` | Class names (foreground only) |
 | `--batch_size` | Batch size for inference |
 | `--num_workers` | Number of data loading workers |
 | `--output_dir` | Directory to save predictions |
-| `--num_classes` | Override number of classes from checkpoint |
 | `--group` | Group number for output ZIP filename (e.g., 1 → `group1_task1_results.zip`) |
 
 ### Output
@@ -260,6 +267,8 @@ python train.py \
     --output_dir ./model_checkpoints
 ```
 
+**Note on Configuration Precedence:** CLI arguments always override YAML config values. For example, `python train.py --config baseline_config.yaml --batch_size 32` will use 32 from CLI, ignoring the config file's value.
+
 #### Key Arguments for Training
 
 | Argument | Description |
@@ -267,11 +276,11 @@ python train.py \
 | `--config` | Configuration file |
 | `--data_dir` | Path to directory containing NIfTI ROI files |
 | `--labels_csv` | Path to CSV file with columns: patient_id, type |
-| `--val_dir` | Separate validation data directory (if not provided, uses `--train_val_split`) |
+| `--val_dir` | Separate validation data directory (if not provided, uses `--val_fraction`) |
 | `--val_labels_csv` | CSV file for validation data (required if `--val_dir` is specified) |
 | `--model_type` | Model architecture: `resnet18`, `resnet50`, or `densenet121` |
 | `--num_classes` | Number of output classes |
-| `--pretrained` | Use ImageNet pretrained weights (set to `true`) |
+| `--class_names` | Class names in order (e.g., `BCLM CRLM HCC HH ICC`) |
 | `--max_epochs` | Max epochs per fold |
 | `--batch_size` | Batch size per GPU |
 | `--learning_rate` | Initial learning rate |
@@ -280,11 +289,13 @@ python train.py \
 | `--val_interval` | Validation frequency (epochs) |
 | `--patience` | Early stopping patience |
 | `--k_folds` | Number of cross-validation folds |
-| `--train_val_split` | Train/val split ratio if no separate `--val_dir` |
+| `--val_fraction` | Fraction of training data reserved for validation (e.g., 0.2 = 20% val) |
 | `--output_dir` | Directory to save checkpoints and logs |
 | `--experiment_name` | Experiment name for logging |
 | `--seed` | Random seed for reproducibility |
 | `--resume_from` | Path to checkpoint to resume training from |
+
+**Configuration Philosophy:** Simple, top-level parameters are exposed as CLI args for quick experimentation. Advanced parameters (optimizer type, loss function, scheduler configuration, architecture-specific tuning) are configured in YAML only to avoid CLI clutter.
 
 #### Step 2: Evaluate on Test Set
 ```bash
@@ -292,6 +303,7 @@ python evaluate.py \
     --config baseline_config.yaml \
     --input /path/to/test/roi_data \
     --output ./predictions \
+    --models_dir ./checkpoints/task2_resnet18_baseline \
     --group 1
 ```
 
@@ -299,15 +311,15 @@ python evaluate.py \
 
 | Argument | Description |
 |---|---|
-| `--config` | Configuration file with model settings |
-| `--input` | Path to test ROI NIfTI files |
+| `--config` | Configuration file with model settings (optional, but recommended) |
+| `--input` | Path to directory containing test ROI files |
 | `--output` | Directory where `predictions.csv` will be saved |
-| `--models-dir` | Directory containing `cv_results.json` (ensemble) or `best_model.pth` (single model) |
-| `--model` | Explicit path to single `.pth` checkpoint (overrides `--models-dir`) |
-| `--model-type` | Model architecture (from config or override) |
-| `--num-classes` | Number of output classes (from config or override) |
-| `--classes` | Class names in order (from config or override) |
-| `--device` | Device to use: `cuda` or `cpu` |
+| `--models_dir` | Directory containing `cv_results.json` (ensemble) or `best_model.pth` (single model) |
+| `--model` | Explicit path to single `.pth` checkpoint (overrides `--models_dir`) |
+| `--model_type` | Model architecture: `resnet18`, `resnet50`, `densenet121` (required if `--config` not provided) |
+| `--num_classes` | Number of output classes (required if `--config` not provided) |
+| `--classes` | Class names in label-index order (required if `--config` not provided) |
+| `--device` | Device: `cuda` or `cpu` (auto-detected if omitted) |
 | `--group` | Group number for output filename (e.g., 1 → `group1_task2_results.csv`) |
 
 ---

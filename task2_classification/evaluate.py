@@ -55,7 +55,7 @@ def parse_args():
     p.add_argument(
         '--config', default=None,
         help='Path to training config YAML (e.g. baseline_config.yaml). '
-             'If not provided, you must specify --model-type, --num-classes, and --classes as CLI arguments.',
+             'If not provided, you must specify --model_type, --num_classes, and --classes as CLI arguments.',
     )
     p.add_argument(
         '--input', required=True,
@@ -67,21 +67,21 @@ def parse_args():
         help='Directory where predictions.csv will be written.',
     )
     p.add_argument(
-        '--models-dir', default=None,
+        '--models_dir', default=None,
         help='Directory containing cv_results.json (ensemble) or best_model.pth (single model). '
              'Script automatically checks nested model_checkpoints/ subfolder if present. '
              'cv_results.json takes priority when both are present.',
     )
     p.add_argument(
         '--model', default=None,
-        help='Explicit path to a single .pth checkpoint (overrides --models-dir).',
+        help='Explicit path to a single .pth checkpoint (overrides --models_dir).',
     )
     p.add_argument(
-        '--model-type', default=None,
+        '--model_type', default=None,
         help='Model architecture identifier (required if --config not provided; default: resnet18 from config).',
     )
     p.add_argument(
-        '--num-classes', type=int, default=None,
+        '--num_classes', type=int, default=None,
         help='Number of output classes (required if --config not provided; default: 5 from config).',
     )
     p.add_argument(
