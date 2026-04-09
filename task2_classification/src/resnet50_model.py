@@ -29,6 +29,4 @@ class ClassificationModel(ClassificationModelBase):
             num_classes=num_classes,
             conv1_t_size=arch_config.get('conv1_t_size', 7),
             conv1_t_stride=arch_config.get('conv1_t_stride', 2),
-            feed_forward=False,
-            bias_downsample=True,
         )
