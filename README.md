@@ -80,6 +80,8 @@ pip install pyradiomics scikit-learn xgboost pandas joblib PyYAML tqdm
 
 ### Download Data
 
+#### 🎓 Train Data
+
 **Dataset Link:** [CREATE Challenge Dataset on SharePoint](https://queensuca-my.sharepoint.com/:f:/g/personal/23ws9_queensu_ca/IgBCzxn9AJFZTo8SETBTIqhKAdf1vNFKUlaL59eH_IdI3x8?e=yonBuc)
 
 > 📧 **Password:** Sent to your group email on challenge start date. Check your inbox!
@@ -87,8 +89,6 @@ pip install pyradiomics scikit-learn xgboost pandas joblib PyYAML tqdm
 **Dataset Structure:**
 - `task1_data/` — Task 1 training data (CT images + segmentation masks)
 - `task2_data/` — Task 2 training data (Tumor ROI files + labels CSV)
-
-**Test Data** → Available on test data release date
 
 **What's Inside:**
 
@@ -136,6 +136,12 @@ task2_data/
 - CRLM (Colorectal liver metastases)
 - BCLM (Breast cancer liver metastases)
 - HH (Hemangioma)
+
+---
+
+#### 🧪 Test Data
+
+**Dataset Link:** [CREATE Challenge Dataset on SharePoint](https://queensuca-my.sharepoint.com/:u:/g/personal/23ws9_queensu_ca/IQDs4a2pnFqnTLoWnSvbkFBPAVQc8BOIkxkwYTo_TFHoIE4)
 
 ---
 
